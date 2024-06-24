@@ -2,11 +2,11 @@
 # Copyright (C) 2022 ORGANIZATION
 # This file is distributed under the same license as the ckan project.
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2022.
-# 
+#
 # Translators:
 # Adrià Mercader <amercadero@gmail.com>, 2020
 # Ondics Githubler, 2022
-# 
+#
 #, fuzzy
 msgid ""
 msgstr ""
@@ -2714,7 +2714,7 @@ msgstr ""
 
 #: ckan/templates/home/snippets/promoted.html:19
 msgid "This is a featured section"
-msgstr "Dies ist ein hervorgehobener Abschnitt"
+msgstr "Open raamwerk voor het stimuleren van hoogwaardige EU-datasets uit de publieke sector"
 
 #: ckan/templates/home/snippets/search.html:2
 msgid "E.g. environment"
