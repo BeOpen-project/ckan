@@ -2557,7 +2557,7 @@ msgstr ""
 
 #: ckan/templates/home/snippets/promoted.html:19
 msgid "This is a featured section"
-msgstr ""
+msgstr "Open framework for boosting EU High Value Datasets from Public Sector"
 
 #: ckan/templates/home/snippets/search.html:2
 msgid "E.g. environment"

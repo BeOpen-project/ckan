@@ -11,11 +11,12 @@ volumes:
 
 services:
   ckan:
+    image: ckan
     container_name: ckan
     build:
-      context: ../../
-      args:
-          - CKAN_SITE_URL=${CKAN_SITE_URL}
+      context: .
+    #  args:
+    #      - CKAN_SITE_URL=${CKAN_SITE_URL}
     links:
       - db
       - solr
@@ -45,6 +46,11 @@ services:
       - ckan_config:/etc/ckan
       - ckan_home:/usr/lib/ckan
       - ckan_storage:/var/lib/ckan
+      - ../../ckan/config/deployment.ini:/srv/app/ckan.ini
+      - ../../ckan/ckan/templates/home/snippets/promoted.html:/srv/app/src/ckan/ckan/templates/home/snippets/promoted.html
+      - ./beopen_logo.png:/srv/app/src/ckan/ckan/public/base/images/placeholder-420x220.png
+      #- ../../../ckan/ckan/i18n/:/srv/app/src/ckan/ckan/i18n/
+      #- ./test/:/srv/app/test/
 
   datapusher:
     container_name: datapusher

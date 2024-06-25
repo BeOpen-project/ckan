@@ -2730,7 +2730,7 @@ msgstr ""
 
 #: ckan/templates/home/snippets/promoted.html:19
 msgid "This is a featured section"
-msgstr "Esta es una sección destacada"
+msgstr "Marco abierto para impulsar los conjuntos de datos de alto valor de la UE del sector público"
 
 #: ckan/templates/home/snippets/search.html:2
 msgid "E.g. environment"

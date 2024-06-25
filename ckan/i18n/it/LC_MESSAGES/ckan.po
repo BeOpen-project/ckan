@@ -2687,7 +2687,7 @@ msgstr ""
 
 #: ckan/templates/home/snippets/promoted.html:19
 msgid "This is a featured section"
-msgstr "Questa è una sezione in evidenza"
+msgstr "Un quadro aperto per promuovere i set di dati europei di alto valore provenienti dal settore pubblico"
 
 #: ckan/templates/home/snippets/search.html:2
 msgid "E.g. environment"
