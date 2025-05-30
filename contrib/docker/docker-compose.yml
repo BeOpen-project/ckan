@@ -11,12 +11,12 @@ volumes:
 
 services:
   ckan:
-    image: ckan
     container_name: ckan
     build:
       context: .
-    #  args:
-    #      - CKAN_SITE_URL=${CKAN_SITE_URL}
+      dockerfile: Dockerfile
+      args:
+          - CKAN_SITE_URL=${CKAN_SITE_URL}
     links:
       - db
       - solr
@@ -24,9 +24,8 @@ services:
     depends_on:
       - db
     ports:
-      - "0.0.0.0:${CKAN_PORT}:5000"
+      - "5000:5000"
     environment:
-      # Defaults work with linked containers, change to use own Postgres, SolR, Redis or Datapusher
       - CKAN_SQLALCHEMY_URL=postgresql://ckan:${POSTGRES_PASSWORD}@db/ckan
       - CKAN_DATASTORE_WRITE_URL=postgresql://ckan:${POSTGRES_PASSWORD}@db/datastore
       - CKAN_DATASTORE_READ_URL=postgresql://datastore_ro:${DATASTORE_READONLY_PASSWORD}@db/datastore
@@ -37,26 +36,34 @@ services:
       - CKAN_MAX_UPLOAD_SIZE_MB=${CKAN_MAX_UPLOAD_SIZE_MB}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - DS_RO_PASS=${DATASTORE_READONLY_PASSWORD}
-    # Debug with pdb (example) - Interact with `docker attach $(docker container ls -qf name=ckan)`
-    #command: 'python -m pdb /usr/lib/ckan/venv/bin/ckan --config /etc/ckan/production.ini run --host 0.0.0.0 --passthrough-errors'
-    #tty: true
-    #stdin_open: true
-
     volumes:
+      - ./plug.sh:/srv/app/plug.sh
       - ckan_config:/etc/ckan
       - ckan_home:/usr/lib/ckan
       - ckan_storage:/var/lib/ckan
       - ../../ckan/config/deployment.ini:/srv/app/ckan.ini
-      - ../../ckan/ckan/templates/home/snippets/promoted.html:/srv/app/src/ckan/ckan/templates/home/snippets/promoted.html
+      - ../../ckan/config/dcat_ap_full.yaml:/srv/app/src/ckanext-dcat/ckanext/dcat/schemas/dcat_ap_full.yaml
+      - ../../ckan/config/custom_dcat_ap_3_profile.py:/srv/app/src/ckanext-dcat/ckanext/dcat/profiles/custom_dcat_ap_3_profile.py
+      - ../../ckan/config/pyproject.toml:/srv/app/src/ckanext-dcat/pyproject.toml
+      #- ../../ckan/who.ini:/srv/app/who.ini
+      - ../../ckan/templates/home/snippets/promoted.html:/srv/app/src/ckan/ckan/templates/home/snippets/promoted.html
       - ./beopen_logo.png:/srv/app/src/ckan/ckan/public/base/images/placeholder-420x220.png
       #- ../../../ckan/ckan/i18n/:/srv/app/src/ckan/ckan/i18n/
       #- ./test/:/srv/app/test/
+    #command: ["bash", "/srv/app/plug.sh"]
+    command: >
+      sh -c "
+        cd /srv/app/src/ckanext-dcat &&
+        pip install -e . &&
+        ckan run -H 0.0.0.0 -p 5000
+      "
 
   datapusher:
     container_name: datapusher
-    image: clementmouchet/datapusher
+    image: keitaro/ckan-datapusher:latest
     ports:
       - "8800:8800"
+ 
 
   db:
     container_name: db
@@ -74,7 +81,8 @@ services:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "ckan"]
-
+    ports:
+      - "8012:5432"
   solr:
     container_name: solr
     build:
@@ -82,8 +90,11 @@ services:
       dockerfile: contrib/docker/solr/Dockerfile
     volumes:
       - solr_data:/opt/solr/server/solr/ckan/data
-
+    ports:
+      - "8014:8983"
 
   redis:
     container_name: redis
     image: redis:latest
+    ports:
+      - "8013:6379"

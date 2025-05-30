@@ -1,5 +1,7 @@
-FROM alpine:3.15
-ARG CKAN_VERSION=ckan-2.9.11
+#FROM alpine:3.15
+FROM alpine:3.18
+#ARG CKAN_VERSION=ckan-2.9.11
+ARG CKAN_VERSION=ckan-2.10.5
 
 # Internals, you probably don't need to change these
 ENV TZ=UTC
@@ -13,7 +15,14 @@ ENV GIT_URL=https://github.com/ckan/ckan.git
 ENV GIT_BRANCH=${CKAN_VERSION}
 # Customize these on the .env file if needed
 ENV CKAN_SITE_URL=http://localhost:5000
-ENV CKAN__PLUGINS image_view text_view recline_view datastore envvars
+ENV CKAN__PLUGINS image_view text_view recline_view datastore envvars dcat dcat_json_interface oidc_pkce structured_data scheming_datasets
+ENV CKANEXT_KEYCLOAK_SERVER_URL=https://platform.beopendep.it/auth/realms/master/.well-known/openid-configuration
+ENV CKANEXT_KEYCLOAK_CLIENT_ID=ckan
+ENV CKANEXT_KEYCLOAK_REALM_NAME=master
+ENV CKANEXT_KEYCLOAK_REDIRECT_URI=https://platform.beopendep.it/ckan
+ENV CKANEXT_KEYCLOAK_CLIENT_SECRET_KEY=W2lBktmbDOZFYlpc3i0RVGxQDgyqzhq9
+ENV CKANEXT_KEYCLOAK_BUTTON_STYLE=google
+ENV CKANEXT_KEYCLOAK_ENABLE_CKAN_INTERNAL_LOGIN=True
 
 # UWSGI options
 ENV UWSGI_HARAKIRI=50
@@ -74,8 +83,11 @@ RUN apk add --no-cache git \
 
 COPY setup/supervisord.conf /etc
 
+RUN pip3 install --upgrade pip setuptools && \
+    pip3 install -e git+${GIT_URL}@${GIT_BRANCH}#egg=ckan && \
+
 # Install CKAN
-RUN pip3 install -e git+${GIT_URL}@${GIT_BRANCH}#egg=ckan && \
+#RUN pip3 install -e git+${GIT_URL}@${GIT_BRANCH}#egg=ckan && \
     cd ${SRC_DIR}/ckan && \
     cp who.ini ${APP_DIR} && \
     # Workaround, can be removed when 2.10.2 is released
@@ -95,6 +107,44 @@ RUN pip3 install -e git+${GIT_URL}@${GIT_BRANCH}#egg=ckan && \
     ckan config-tool ${CKAN_INI} "beaker.session.secret = " && \
     ckan config-tool ${CKAN_INI} "ckan.plugins = ${CKAN__PLUGINS}"
 
+# Install dependencies for ckanext-dcat
+RUN pip3 install -e git+https://github.com/ckan/ckanext-dcat.git#egg=ckanext-dcat && \
+    ckan config-tool ${CKAN_INI} "ckan.plugins = ${CKAN__PLUGINS} dcat dcat_json_interface"
+RUN pip install --upgrade rdflib geomet future
+RUN pip install "isodate<1.0.0,>=0.7.2"
+
+RUN ckan config-tool ${CKAN_INI} "ckanext.dcat.catalog_endpoint = /dcat/catalog.rdf"
+RUN ckan config-tool ${CKAN_INI} "ckanext.dcat.enable_content_negotiation = true"
+# ENV CKAN__PLUGINS="dcat"
+
+# Install CKAN OIDC PKCE extension
+RUN pip3 install ckanext-oidc-pkce && \
+    ckan config-tool ${CKAN_INI} "ckan.plugins = ${CKAN__PLUGINS} oidc_pkce"
+# Install CKAN ckanext-scheming extension
+RUN pip install -e git+https://github.com/ckan/ckanext-scheming.git#egg=ckanext-scheming
+ 
+# Install the keycloak module 
+RUN pip install python-keycloak==0.24.0 blinker
+ 
+# Check if the plugin is installed correctly
+RUN if ! pip3 show ckanext-oidc-pkce; then echo "ckanext-oidc-pkce not installed"; exit 1; fi
+ 
+# Configurazione di OIDC PKCE per Keycloak
+RUN ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.base_url = https://platform.beopendep.it" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.client_id = ckan" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.client_secret = W2lBktmbDOZFYlpc3i0RVGxQDgyqzhq9" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.auth_path = /auth/realms/master/protocol/openid-connect/auth" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.token_path = /auth/realms/master/protocol/openid-connect/token" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.userinfo_path = /auth/realms/master/protocol/openid-connect/userinfo" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.redirect_path = /user/login/oidc-pkce/callback" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.error_redirect = /user/register" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.scope = openid email profile" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.use_same_id = true" && \
+    ckan config-tool ${CKAN_INI} "ckanext.oidc_pkce.munge_password = true"
+
+# Find and modify the plugin to use the new directive new
+RUN sed -i 's/dashboard.index/dashboard.datasets/' /usr/lib/python3.11/site-packages/ckanext/oidc_pkce/views.py
+
 # Create a local user and group to run the app
 RUN addgroup -g 92 -S ckan && \
     adduser -u 92 -h /home/ckan -s /bin/bash -D -G ckan ckan
@@ -102,12 +152,13 @@ RUN addgroup -g 92 -S ckan && \
 # Create local storage folder
 RUN mkdir -p ${CKAN_STORAGE_PATH} && \
     chown -R ckan:ckan ${CKAN_STORAGE_PATH}
-
+##    
 COPY setup/prerun.py ${APP_DIR}
 COPY setup/start_ckan.sh ${APP_DIR}
 ADD https://raw.githubusercontent.com/ckan/ckan/${GIT_BRANCH}/wsgi.py ${APP_DIR}
 RUN chmod 644 ${APP_DIR}/wsgi.py
-
+##
+ 
 # Create entrypoint directory for children image scripts
 ONBUILD RUN mkdir /docker-entrypoint.d
 
@@ -115,4 +166,4 @@ EXPOSE 5000
 
 HEALTHCHECK --interval=60s --timeout=5s --retries=5 CMD curl --fail http://localhost:5000/api/3/action/status_show || exit 1
 
-CMD ["/srv/app/start_ckan.sh"]
+CMD ["sh","/srv/app/start_ckan.sh"]
