@@ -30,16 +30,16 @@ package_revision table.)
 from __future__ import print_function
 from __future__ import absolute_import
 import argparse
-from collections import defaultdict
-from typing import Any
-from sqlalchemy import text
 import sys
+from collections import defaultdict
+from six.moves import input
+from six import text_type
 
 
 # not importing anything from ckan until after the arg parsing, to fail on bad
 # args quickly.
 
-_context: Any = None
+_context = None
 
 
 def get_context():
@@ -54,23 +54,23 @@ def get_context():
     return _context
 
 
-def num_unmigrated(conn):
-    num_unmigrated = conn.execute(text('''
-    SELECT count(*) FROM activity a JOIN package p ON a.object_id=p.id
-    WHERE a.activity_type IN ('new package', 'changed package')
-    AND a.data NOT LIKE '%%{"actor"%%'
-    AND p.private = false;
-    ''')).scalar()
+def num_unmigrated(engine):
+    num_unmigrated = engine.execute('''
+        SELECT count(*) FROM activity a JOIN package p ON a.object_id=p.id
+        WHERE a.activity_type IN ('new package', 'changed package')
+        AND a.data NOT LIKE '%%{"actor"%%'
+        AND p.private = false;
+    ''').fetchone()[0]
     return num_unmigrated
 
 
 def num_activities_migratable():
     from ckan import model
-    num_activities = model.Session.execute(text('''
+    num_activities = model.Session.execute(u'''
     SELECT count(*) FROM activity a JOIN package p ON a.object_id=p.id
     WHERE a.activity_type IN ('new package', 'changed package')
     AND p.private = false;
-    ''')).fetchall()[0][0]
+    ''').fetchall()[0][0]
     return num_activities
 
 
@@ -125,7 +125,7 @@ def migrate_dataset(dataset_name, errors):
 
     import ckan.logic as logic
     from ckan import model
-    from ckanext.activity.model import Activity
+
     # 'hidden' activity is that by site_user, such as harvests, which are
     # not shown in the activity stream because they can be too numerous.
     # However these do have Activity objects, and if a hidden Activity is
@@ -152,14 +152,14 @@ def migrate_dataset(dataset_name, errors):
               i + 1, num_activities, activity[u'timestamp']))
 
         # we need activity.data and using the ORM is the fastest
-        activity_obj = model.Session.query(Activity).get(activity[u'id'])
+        activity_obj = model.Session.query(model.Activity).get(activity[u'id'])
         if u'resources' in activity_obj.data.get(u'package', {}):
             print(u'    activity has full dataset already recorded'
                   ' - no action')
             continue
 
         # get the dataset as it was at this revision:
-        # call package_show just as we do in Activity::activity_stream_item(),
+        # call package_show just as we do in package.py:activity_stream_item(),
         # only with a revision_id (to get it as it was then)
         context = dict(
             get_context(),
@@ -178,7 +178,7 @@ def migrate_dataset(dataset_name, errors):
             if isinstance(exc, logic.NotFound):
                 error_msg = u'Revision missing'
             else:
-                error_msg = str(exc)
+                error_msg = text_type(exc)
             print(u'    Error: {}! Skipping this version '
                   '(revision_id={}, timestamp={})'
                   .format(error_msg, activity_obj.revision_id,
@@ -197,8 +197,8 @@ def migrate_dataset(dataset_name, errors):
                 dataset = {u'title': u'unknown'}
 
         # get rid of revision_timestamp, which wouldn't be there if saved by
-        # during Activity::activity_stream_item() - something to do with not
-        # specifying revision_id.
+        # during activity_stream_item() - something to do with not specifying
+        # revision_id.
         if u'revision_timestamp' in (dataset.get(u'organization') or {}):
             del dataset[u'organization'][u'revision_timestamp']
         for res in dataset.get(u'resources', []):
@@ -208,8 +208,7 @@ def migrate_dataset(dataset_name, errors):
         actor = model.Session.query(model.User).get(activity[u'user_id'])
         actor_name = actor.name if actor else activity[u'user_id']
 
-        # add the data to the Activity, just as we do in
-        # Activity::activity_stream_item()
+        # add the data to the Activity, just as we do in activity_stream_item()
         data = {
             u'package': dataset,
             u'actor': actor_name,
@@ -226,9 +225,9 @@ def migrate_dataset(dataset_name, errors):
 def wipe_activity_detail(delete_activity_detail):
     from ckan import model
     activity_detail_has_rows = \
-        bool(model.Session.execute(text(
-            'SELECT count(*) '
-            'FROM (SELECT * FROM "activity_detail" LIMIT 1) as t;'))
+        bool(model.Session.execute(
+            u'SELECT count(*) '
+            'FROM (SELECT * FROM "activity_detail" LIMIT 1) as t;')
             .fetchall()[0][0])
     if not activity_detail_has_rows:
         print(u'\nactivity_detail table is aleady emptied')
@@ -246,7 +245,7 @@ def wipe_activity_detail(delete_activity_detail):
     if delete_activity_detail.lower()[:1] != u'y':
         return
     from ckan import model
-    model.Session.execute(text('DELETE FROM "activity_detail";'))
+    model.Session.execute(u'DELETE FROM "activity_detail";')
     model.Session.commit()
     print(u'activity_detail deleted')
 
@@ -284,7 +283,7 @@ if __name__ == u'__main__':
         make_app(load_config(args.config))
     except ImportError:
         # for CKAN 2.6 and earlier
-        def load_config(config):  # type: ignore
+        def load_config(config):
             from ckan.lib.cli import CkanCommand
             cmd = CkanCommand(name=None)
 
@@ -305,7 +304,7 @@ if __name__ == u'__main__':
         migrate_all_datasets()
         wipe_activity_detail(delete_activity_detail=args.delete)
     else:
-        errors: Any = defaultdict(int)
+        errors = defaultdict(int)
         with PackageDictizeMonkeyPatch():
             migrate_dataset(args.dataset, errors)
         print_errors(errors)

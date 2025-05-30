@@ -6,7 +6,7 @@ Contains miscelaneous set of DB-related functions
 
 
 _special_characters = '%_'
-def escape_sql_like_special_characters(term: str, escape: str='\\') -> str:
+def escape_sql_like_special_characters(term, escape='\\'):
     """
     Escapes characters that are special to the the sql LIKE expression.
 

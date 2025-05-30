@@ -1,17 +1,14 @@
 # encoding: utf-8
 
 '''Example IDatasetFormPlugin'''
-from __future__ import annotations
-
-from ckan.types import Schema
 import ckan.plugins as p
 import ckan.plugins.toolkit as tk
 
 
-class ExampleIDatasetFormPlugin(tk.DefaultDatasetForm, p.SingletonPlugin):
+class ExampleIDatasetFormPlugin(p.SingletonPlugin, tk.DefaultDatasetForm):
     p.implements(p.IDatasetForm)
 
-    def _modify_package_schema(self, schema: Schema) -> Schema:
+    def _modify_package_schema(self, schema):
         schema.update({
             'custom_text': [tk.get_validator('ignore_missing'),
                             tk.get_converter('convert_to_extras')]
@@ -19,20 +16,17 @@ class ExampleIDatasetFormPlugin(tk.DefaultDatasetForm, p.SingletonPlugin):
         return schema
 
     def create_package_schema(self):
-        schema: Schema = super(
-            ExampleIDatasetFormPlugin, self).create_package_schema()
+        schema = super(ExampleIDatasetFormPlugin, self).create_package_schema()
         schema = self._modify_package_schema(schema)
         return schema
 
     def update_package_schema(self):
-        schema: Schema = super(
-            ExampleIDatasetFormPlugin, self).update_package_schema()
+        schema = super(ExampleIDatasetFormPlugin, self).update_package_schema()
         schema = self._modify_package_schema(schema)
         return schema
 
-    def show_package_schema(self) -> Schema:
-        schema: Schema = super(
-            ExampleIDatasetFormPlugin, self).show_package_schema()
+    def show_package_schema(self):
+        schema = super(ExampleIDatasetFormPlugin, self).show_package_schema()
         schema.update({
             'custom_text': [tk.get_converter('convert_from_extras'),
                             tk.get_validator('ignore_missing')]
@@ -44,7 +38,7 @@ class ExampleIDatasetFormPlugin(tk.DefaultDatasetForm, p.SingletonPlugin):
         # package types not handled by any other IDatasetForm plugin.
         return True
 
-    def package_types(self) -> list[str]:
+    def package_types(self):
         # This plugin doesn't handle any special package types, it just
         # registers itself as the default (above).
         return []

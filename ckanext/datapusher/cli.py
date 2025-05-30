@@ -1,11 +1,12 @@
 # encoding: utf-8
 
-from __future__ import annotations
+from __future__ import print_function
 
 import logging
 
 import click
 
+import ckan.model as model
 import ckan.plugins.toolkit as tk
 import ckanext.datastore.backend as datastore_backend
 from ckan.cli import error_shout
@@ -22,7 +23,7 @@ requires_confirmation = click.option(
 )
 
 
-def confirm(yes: bool):
+def confirm(yes):
     if yes:
         return
     click.confirm(question, abort=True)
@@ -37,8 +38,8 @@ def datapusher():
 
 @datapusher.command()
 @requires_confirmation
-def resubmit(yes: bool):
-    u'''Resubmit updated datastore resources.
+def resubmit(yes):
+    u'''Resubmit udated datastore resources.
     '''
     confirm(yes)
 
@@ -49,7 +50,7 @@ def resubmit(yes: bool):
 @datapusher.command()
 @click.argument(u'package', required=False)
 @requires_confirmation
-def submit(package: str, yes: bool):
+def submit(package, yes):
     u'''Submits resources from package.
 
     If no package ID/name specified, submits all resources from all
@@ -59,7 +60,8 @@ def submit(package: str, yes: bool):
 
     if not package:
         ids = tk.get_action(u'package_list')({
-            'ignore_auth': True
+            u'model': model,
+            u'ignore_auth': True
         }, {})
     else:
         ids = [package]
@@ -68,6 +70,7 @@ def submit(package: str, yes: bool):
         package_show = tk.get_action(u'package_show')
         try:
             pkg = package_show({
+                u'model': model,
                 u'ignore_auth': True
             }, {u'id': id})
         except Exception as e:
@@ -80,10 +83,11 @@ def submit(package: str, yes: bool):
         _submit(resource_ids)
 
 
-def _submit(resources: list[str]):
+def _submit(resources):
     click.echo(u'Submitting {} datastore resources'.format(len(resources)))
     user = tk.get_action(u'get_site_user')({
-        'ignore_auth': True
+        u'model': model,
+        u'ignore_auth': True
     }, {})
     datapusher_submit = tk.get_action(u'datapusher_submit')
     for id in resources:

@@ -5,6 +5,7 @@ import pytest
 from ckan.lib.helpers import url_for as url_for
 
 
+@pytest.mark.usefixtures("with_request_context")
 class TestUtil(object):
     def test_redirect_ok(self, app):
         response = app.get(

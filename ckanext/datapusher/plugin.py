@@ -1,26 +1,36 @@
 # encoding: utf-8
-from __future__ import annotations
 
-from ckan.common import CKANConfig
-from ckan.types import Action, AuthFunction, Context
 import logging
-from typing import Any, Callable
 
+import ckan.logic as logic
 import ckan.model as model
 import ckan.plugins as p
-import ckanext.datapusher.views as views
+import ckan.plugins.toolkit as toolkit
+import ckanext.datapusher.blueprint as blueprint
 import ckanext.datapusher.helpers as helpers
 import ckanext.datapusher.logic.action as action
 import ckanext.datapusher.logic.auth as auth
 
 log = logging.getLogger(__name__)
+_get_or_bust = logic.get_or_bust
+
+DEFAULT_FORMATS = [
+    u'csv',
+    u'xls',
+    u'xlsx',
+    u'tsv',
+    u'application/csv',
+    u'application/vnd.ms-excel',
+    u'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    u'ods',
+    u'application/vnd.oasis.opendocument.spreadsheet',
+]
 
 
 class DatastoreException(Exception):
     pass
 
 
-@p.toolkit.blanket.config_declarations
 class DatapusherPlugin(p.SingletonPlugin):
     p.implements(p.IConfigurer, inherit=True)
     p.implements(p.IConfigurable, inherit=True)
@@ -34,19 +44,20 @@ class DatapusherPlugin(p.SingletonPlugin):
     legacy_mode = False
     resource_show_action = None
 
-    def update_config(self, config: CKANConfig):
+    def update_config(self, config):
         templates_base = config.get(u'ckan.base_templates_folder')
-        p.toolkit.add_template_directory(config, templates_base)
-        p.toolkit.add_public_directory(config, 'public')
-        p.toolkit.add_resource('assets', 'ckanext-datapusher')
+        toolkit.add_template_directory(config, templates_base)
 
-    def configure(self, config: CKANConfig):
+    def configure(self, config):
         self.config = config
 
+        datapusher_formats = config.get(u'ckan.datapusher.formats',
+                                        u'').lower()
+        self.datapusher_formats = datapusher_formats.split() or DEFAULT_FORMATS
+
         for config_option in (
-            "ckan.site_url",
-            "ckan.datapusher.url",
-            "ckan.datapusher.api_token",
+            u'ckan.site_url',
+            u'ckan.datapusher.url',
         ):
             if not config.get(config_option):
                 raise Exception(
@@ -56,9 +67,12 @@ class DatapusherPlugin(p.SingletonPlugin):
 
     # IResourceUrlChange
 
-    def notify(self, resource: model.Resource):
-        context: Context = {'ignore_auth': True}
-        resource_dict = p.toolkit.get_action(u'resource_show')(
+    def notify(self, resource):
+        context = {
+            u'model': model,
+            u'ignore_auth': True,
+        }
+        resource_dict = toolkit.get_action(u'resource_show')(
             context, {
                 u'id': resource.id,
             }
@@ -67,30 +81,27 @@ class DatapusherPlugin(p.SingletonPlugin):
 
     # IResourceController
 
-    def after_resource_create(
-            self, context: Context, resource_dict: dict[str, Any]):
+    def after_create(self, context, resource_dict):
 
         self._submit_to_datapusher(resource_dict)
 
-    def after_update(
-            self, context: Context, resource_dict: dict[str, Any]):
+    def after_update(self, context, resource_dict):
 
         self._submit_to_datapusher(resource_dict)
 
-    def _submit_to_datapusher(self, resource_dict: dict[str, Any]):
-        context: Context = {
+    def _submit_to_datapusher(self, resource_dict):
+
+        context = {
+            u'model': model,
             u'ignore_auth': True,
             u'defer_commit': True
         }
 
         resource_format = resource_dict.get('format')
-        supported_formats = p.toolkit.config.get(
-            'ckan.datapusher.formats'
-        )
 
         submit = (
             resource_format
-            and resource_format.lower() in supported_formats
+            and resource_format.lower() in self.datapusher_formats
             and resource_dict.get('url_type') != u'datapusher'
         )
 
@@ -98,7 +109,7 @@ class DatapusherPlugin(p.SingletonPlugin):
             return
 
         try:
-            task = p.toolkit.get_action(u'task_status_show')(
+            task = toolkit.get_action(u'task_status_show')(
                 context, {
                     u'entity_id': resource_dict['id'],
                     u'task_type': u'datapusher',
@@ -114,7 +125,7 @@ class DatapusherPlugin(p.SingletonPlugin):
                     u'resource {0}'.format(resource_dict['id'])
                 )
                 return
-        except p.toolkit.ObjectNotFound:
+        except toolkit.ObjectNotFound:
             pass
 
         try:
@@ -122,31 +133,31 @@ class DatapusherPlugin(p.SingletonPlugin):
                 u'Submitting resource {0}'.format(resource_dict['id']) +
                 u' to DataPusher'
             )
-            p.toolkit.get_action(u'datapusher_submit')(
+            toolkit.get_action(u'datapusher_submit')(
                 context, {
                     u'resource_id': resource_dict['id']
                 }
             )
-        except p.toolkit.ValidationError as e:
+        except toolkit.ValidationError as e:
             # If datapusher is offline want to catch error instead
             # of raising otherwise resource save will fail with 500
             log.critical(e)
             pass
 
-    def get_actions(self) -> dict[str, Action]:
+    def get_actions(self):
         return {
             u'datapusher_submit': action.datapusher_submit,
             u'datapusher_hook': action.datapusher_hook,
             u'datapusher_status': action.datapusher_status
         }
 
-    def get_auth_functions(self) -> dict[str, AuthFunction]:
+    def get_auth_functions(self):
         return {
             u'datapusher_submit': auth.datapusher_submit,
             u'datapusher_status': auth.datapusher_status
         }
 
-    def get_helpers(self) -> dict[str, Callable[..., Any]]:
+    def get_helpers(self):
         return {
             u'datapusher_status': helpers.datapusher_status,
             u'datapusher_status_description': helpers.
@@ -156,4 +167,4 @@ class DatapusherPlugin(p.SingletonPlugin):
     # IBlueprint
 
     def get_blueprint(self):
-        return views.get_blueprints()
+        return blueprint.datapusher

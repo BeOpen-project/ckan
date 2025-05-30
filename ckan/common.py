@@ -7,73 +7,76 @@
 #
 # NOTE:  This file is specificaly created for
 # from ckan.common import x, y, z to be allowed
-from __future__ import annotations
 
-import logging
-from collections.abc import MutableMapping, Iterable
-
-from typing import (
-    Any, Optional, TYPE_CHECKING,
-    TypeVar, cast, overload, Union)
-from typing_extensions import Literal
+from collections import MutableMapping
 
 import flask
+import six
 
 from werkzeug.local import Local, LocalProxy
 
-from flask_login import current_user as _cu
-from flask_login import login_user as _login_user, logout_user as _logout_user
 from flask_babel import (gettext as flask_ugettext,
                          ngettext as flask_ungettext)
 
-import simplejson as json  # type: ignore # noqa
-import ckan.lib.maintain as maintain
-from ckan.config.declaration import Declaration
-from ckan.types import Model, Request
+import simplejson as json
+
+if six.PY2:
+    import pylons
+    from pylons.i18n import (ugettext as pylons_ugettext,
+                             ungettext as pylons_ungettext)
+    from pylons import response
+
+current_app = flask.current_app
 
 
-if TYPE_CHECKING:
-    MutableMapping = MutableMapping[str, Any]
-
-SENTINEL = {}
-
-log = logging.getLogger(__name__)
-
-
-current_user = cast(Union["Model.User", "Model.AnonymousUser"], _cu)
-login_user = _login_user
-logout_user = _logout_user
-
-
-@maintain.deprecated('All web requests are served by Flask', since="2.10.0")
 def is_flask_request():
     u'''
-    This function is deprecated. All CKAN requests are now served by Flask
+    A centralized way to determine whether we are in the context of a
+    request being served by Flask or Pylons
     '''
-    return True
+    if six.PY3:
+        return True
+    try:
+        pylons.request.environ
+        pylons_request_available = True
+    except TypeError:
+        pylons_request_available = False
+
+    return (flask.request and
+            (flask.request.environ.get(u'ckan.app') == u'flask_app' or
+             not pylons_request_available))
 
 
-def streaming_response(data: Iterable[Any],
-                       mimetype: str = u'application/octet-stream',
-                       with_context: bool = False) -> flask.Response:
+def streaming_response(
+        data, mimetype=u'application/octet-stream', with_context=False):
     iter_data = iter(data)
-
-    if with_context:
-        iter_data = flask.stream_with_context(iter_data)
-    resp = flask.Response(iter_data, mimetype=mimetype)
-
+    if is_flask_request():
+        # Removal of context variables for pylon's app is prevented
+        # inside `pylons_app.py`. It would be better to decide on the fly
+        # whether we need to preserve context, but it won't affect performance
+        # in any visible way and we are going to get rid of pylons anyway.
+        # Flask allows to do this in easy way.
+        if with_context:
+            iter_data = flask.stream_with_context(iter_data)
+        resp = flask.Response(iter_data, mimetype=mimetype)
+    else:
+        response.app_iter = iter_data
+        resp = response.headers['Content-type'] = mimetype
     return resp
 
 
-def ugettext(*args: Any, **kwargs: Any) -> str:
+def ugettext(*args, **kwargs):
     return flask_ugettext(*args, **kwargs)
 
 
 _ = ugettext
 
 
-def ungettext(*args: Any, **kwargs: Any) -> str:
-    return flask_ungettext(*args, **kwargs)
+def ungettext(*args, **kwargs):
+    if is_flask_request():
+        return flask_ungettext(*args, **kwargs)
+    else:
+        return pylons_ungettext(*args, **kwargs)
 
 
 class CKANConfig(MutableMapping):
@@ -86,13 +89,12 @@ class CKANConfig(MutableMapping):
     `load_environment` method with the values of the ini file or env vars.
 
     '''
-    store: dict[str, Any]
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, *args, **kwargs):
         self.store = dict()
         self.update(dict(*args, **kwargs))
 
-    def __getitem__(self, key: str):
+    def __getitem__(self, key):
         return self.store[key]
 
     def __iter__(self):
@@ -104,209 +106,98 @@ class CKANConfig(MutableMapping):
     def __repr__(self):
         return self.store.__repr__()
 
-    def copy(self) -> dict[str, Any]:
+    def copy(self):
         return self.store.copy()
 
-    def clear(self) -> None:
+    def clear(self):
         self.store.clear()
+
         try:
             flask.current_app.config.clear()
         except RuntimeError:
             pass
 
-    def __setitem__(self, key: str, value: Any):
+        if six.PY2:
+            try:
+                pylons.config.clear()
+                # Pylons set this default itself
+                pylons.config[u'lang'] = None
+            except TypeError:
+                pass
+
+    def __setitem__(self, key, value):
         self.store[key] = value
         try:
             flask.current_app.config[key] = value
         except RuntimeError:
             pass
 
-    def __delitem__(self, key: str):
+        if six.PY2:
+            try:
+                pylons.config[key] = value
+            except TypeError:
+                pass
+
+    def __delitem__(self, key):
         del self.store[key]
         try:
             del flask.current_app.config[key]
         except RuntimeError:
             pass
 
-    def is_declared(self, key: str) -> bool:
-        return key in config_declaration
-
-    def get(self, key: str, default: Any = SENTINEL) -> Any:
-        """Return the value for key if key is in the config, else default.
-        """
-        if default is SENTINEL:
-            default = None
-            if len(config_declaration) and key not in config_declaration:
-                log.warning("Option %s is not declared", key)
-
-        return super().get(key, default)
+        if six.PY2:
+            try:
+                del pylons.config[key]
+            except TypeError:
+                pass
 
 
 def _get_request():
-    return flask.request
+    if is_flask_request():
+        return flask.request
+    else:
+        return pylons.request
 
 
-class HtmxDetails(object):
-    """Object to access htmx properties from the request headers.
+class CKANRequest(LocalProxy):
+    u'''Common request object
 
-    This object will be added to the CKAN `request` object
-    as `request.htmx`. It adds properties to easily access
-    htmx's request headers defined in
-    https://htmx.org/reference/#headers.
-    """
+    This is just a wrapper around LocalProxy so we can handle some special
+    cases for backwards compatibility.
 
-    def __init__(self, request: Any):
-        self.request = request
-
-    def __bool__(self) -> bool:
-        return self.request.headers.get("HX-Request") == "true"
-
-    @property
-    def boosted(self) -> bool:
-        return self.request.headers.get("HX-Boosted") == "true"
-
-    @property
-    def current_url(self) -> str | None:
-        return self.request.headers.get("HX-Current-URL")
-
-    @property
-    def history_restore_request(self) -> bool:
-        return self.request.headers.get("HX-History-Restore-Request") == "true"
-
-    @property
-    def prompt(self) -> str | None:
-        return self.request.headers.get("HX-Prompt")
-
-    @property
-    def target(self) -> str | None:
-        return self.request.headers.get("HX-Target")
-
-    @property
-    def trigger(self) -> str | None:
-        return self.request.headers.get("HX-Trigger")
-
-    @property
-    def trigger_name(self) -> str | None:
-        return self.request.headers.get("HX-Trigger-Name")
-
-
-class CKANRequest(LocalProxy[Request]):
-    '''CKAN request class.
-
-    This is a subclass of the Flask request object. It adds a new
-    `htmx` property to access htmx properties from the request headers.
+    LocalProxy will forward to Flask or Pylons own request objects depending
+    on the output of `_get_request` (which essentially calls
+    `is_flask_request`) and at the same time provide all objects methods to be
+    able to interact with them transparently.
     '''
 
     @property
-    def htmx(self) -> HtmxDetails:
-        return HtmxDetails(self)
-
-    @property
-    @maintain.deprecated('Use `request.args` instead of `request.params`',
-                         since="2.10.0")
     def params(self):
-        '''This property is deprecated.
-
-        Special case as Pylons' request.params is used all over the place.  All
-        new code meant to be run just in Flask (eg views) should always use
-        request.args
-
+        u''' Special case as Pylons' request.params is used all over the place.
+        All new code meant to be run just in Flask (eg views) should always
+        use request.args
         '''
-        return cast(flask.Request, self).args
+        try:
+            return super(CKANRequest, self).params
+        except AttributeError:
+            return self.args
 
 
 def _get_c():
-    return flask.g
+    if is_flask_request():
+        return flask.g
+    else:
+        return pylons.c
 
 
 def _get_session():
-    return flask.session
-
-
-def asbool(obj: Any) -> bool:
-    """Convert a string (e.g. 1, true, True) into a boolean.
-
-    Example::
-
-        assert asbool("yes") is True
-
-    """
-
-    if isinstance(obj, str):
-        obj = obj.strip().lower()
-        if obj in truthy:
-            return True
-        elif obj in falsy:
-            return False
-        else:
-            raise ValueError(u"String is not true/false: {}".format(obj))
-    return bool(obj)
-
-
-def asint(obj: Any) -> int:
-    """Convert a string into an int.
-
-    Example::
-
-        assert asint("111") == 111
-
-    """
-    try:
-        return int(obj)
-    except (TypeError, ValueError):
-        raise ValueError(u"Bad integer value: {}".format(obj))
-
-
-T = TypeVar('T')
-SequenceT = TypeVar('SequenceT', "list[Any]", "tuple[Any]")
-
-
-@overload
-def aslist(obj: str,
-           sep: Optional[str] = None,
-           strip: bool = True) -> list[str]:
-    ...
-
-
-@overload
-def aslist(obj: SequenceT,
-           sep: Optional[str] = None,
-           strip: bool = True) -> SequenceT:
-    ...
-
-
-@overload
-def aslist(obj: Literal[None],
-           sep: Optional[str] = None,
-           strip: bool = True) -> list[str]:
-    ...
-
-
-def aslist(obj: Any, sep: Optional[str] = None, strip: bool = True) -> Any:
-    """Convert a space-separated string into a list.
-
-    Example::
-
-        assert aslist("a b c") == ["a", "b", "c"]
-
-    """
-
-    if isinstance(obj, str):
-        lst = obj.split(sep)
-        if strip:
-            lst = [v.strip() for v in lst]
-        return lst
-    elif isinstance(obj, (list, tuple)):
-        return cast(Any, obj)
-    elif isinstance(obj, Iterable):
-        return list(obj)
-    elif obj is None:
-        return []
+    if is_flask_request():
+        return flask.session
     else:
-        return [obj]
+        return pylons.session
 
 
-def repr_untrusted(danger: Any):
+def repr_untrusted(danger):
     """
     repr-format danger and truncate e.g. for logging untrusted input
     """
@@ -323,15 +214,44 @@ local(u'config')
 # Thread-local safe objects
 config = local.config = CKANConfig()
 
-local("config_declaration")
-config_declaration = local.config_declaration = Declaration()
-
 # Proxies to already thread-local safe objects
-request = cast(flask.Request, CKANRequest(_get_request))
+request = CKANRequest(_get_request)
 # Provide a `c`  alias for `g` for backwards compatibility
-g: Any = LocalProxy(_get_c)
-c = g
-session: Any = LocalProxy(_get_session)
+g = c = LocalProxy(_get_c)
+session = LocalProxy(_get_session)
 
 truthy = frozenset([u'true', u'yes', u'on', u'y', u't', u'1'])
 falsy = frozenset([u'false', u'no', u'off', u'n', u'f', u'0'])
+
+
+def asbool(obj):
+    if isinstance(obj, six.string_types):
+        obj = obj.strip().lower()
+        if obj in truthy:
+            return True
+        elif obj in falsy:
+            return False
+        else:
+            raise ValueError(u"String is not true/false: {}".format(obj))
+    return bool(obj)
+
+
+def asint(obj):
+    try:
+        return int(obj)
+    except (TypeError, ValueError):
+        raise ValueError(u"Bad integer value: {}".format(obj))
+
+
+def aslist(obj, sep=None, strip=True):
+    if isinstance(obj, six.string_types):
+        lst = obj.split(sep)
+        if strip:
+            lst = [v.strip() for v in lst]
+        return lst
+    elif isinstance(obj, (list, tuple)):
+        return obj
+    elif obj is None:
+        return []
+    else:
+        return [obj]

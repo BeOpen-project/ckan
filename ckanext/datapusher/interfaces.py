@@ -1,9 +1,6 @@
 # encoding: utf-8
-from __future__ import annotations
 
 from ckan.plugins.interfaces import Interface
-from typing import Any
-from ckan.types import Context
 
 
 class IDataPusher(Interface):
@@ -15,7 +12,7 @@ class IDataPusher(Interface):
     The before_submit function, when implemented
     """
 
-    def can_upload(self, resource_id: str) -> bool:
+    def can_upload(self, resource_id):
         """ This call when implemented can be used to stop the processing of
         the datapusher submit function. This method will not be called if
         the resource format does not match those defined in the
@@ -40,9 +37,7 @@ class IDataPusher(Interface):
         """
         return True
 
-    def after_upload(
-            self, context: Context, resource_dict: dict[str, Any],
-            dataset_dict: dict[str, Any]) -> None:
+    def after_upload(self, context, resource_dict, dataset_dict):
         """ After a resource has been successfully upload to the datastore
         this method will be called with the resource dictionary and the
         package dictionary for this resource.

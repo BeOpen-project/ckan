@@ -6,27 +6,12 @@
 import copy
 
 import pytest
+import ckan.tests.factories as factories
 import ckan.lib.navl.validators as validators
 from ckan.lib.navl.dictization_functions import StopOnError
 
 
-def validator_data_dict():
-    """Return a data dict with some arbitrary data in it, suitable to be passed
-    to validator functions for testing.
-
-    """
-    return {("other key",): "other value"}
-
-
-def validator_errors_dict():
-    """Return an errors dict with some arbitrary errors in it, suitable to be
-    passed to validator functions for testing.
-
-    """
-    return {("other key",): ["other error"]}
-
-
-def returns_none(function):
+def returns_None(function):
     """A decorator that asserts that the decorated function returns None.
 
     :param function: the function to decorate
@@ -58,7 +43,7 @@ def returns_none(function):
     return call_and_assert
 
 
-def raises_stoponerror(function):
+def raises_StopOnError(function):
     """A decorator that asserts that the decorated function raises
     dictization_functions.StopOnError.
 
@@ -280,18 +265,18 @@ class TestValidators(object):
             key = ("key to be validated",)
 
             # The data to pass to the validator function for validation.
-            data = validator_data_dict()
+            data = factories.validator_data_dict()
             if value != "skip":
                 data[key] = value
 
             # The errors dict to pass to the validator function.
-            errors = validator_errors_dict()
+            errors = factories.validator_errors_dict()
             errors[key] = []
 
             @does_not_modify_other_keys_in_data_dict
             @does_not_modify_errors_dict
             @removes_key_from_data_dict
-            @raises_stoponerror
+            @raises_StopOnError
             def call_validator(*args, **kwargs):
                 return validators.ignore_missing(*args, **kwargs)
 
@@ -303,12 +288,12 @@ class TestValidators(object):
 
         """
         key = ("key to be validated",)
-        data = validator_data_dict()
+        data = factories.validator_data_dict()
         data[key] = "value to be validated"
-        errors = validator_errors_dict()
+        errors = factories.validator_errors_dict()
         errors[key] = []
 
-        @returns_none
+        @returns_None
         @does_not_modify_data_dict
         @does_not_modify_errors_dict
         def call_validator(*args, **kwargs):

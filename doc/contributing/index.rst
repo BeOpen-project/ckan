@@ -41,4 +41,3 @@ of contributions to CKAN:
    database-migrations
    upgrading-dependencies
    release-process
-   maintenance-tools

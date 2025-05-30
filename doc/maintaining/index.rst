@@ -8,7 +8,6 @@ installing, upgrading and configuring CKAN and its features and extensions.
 .. toctree::
    :maxdepth: 1
 
-   releases
    installing/index
    upgrading/index
    getting-started
@@ -18,7 +17,6 @@ installing, upgrading and configuring CKAN and its features and extensions.
    data-viewer
    filestore
    datastore
-   table-designer
    apps-ideas
    tag-vocabularies
    form-integration

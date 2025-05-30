@@ -484,7 +484,7 @@ Simple Search
 -------------
 
 CKAN defers most of the search to Solr and by default it uses the `DisMax Query
-Parser <https://solr.apache.org/guide/8_11/the-dismax-query-parser.html>`_
+Parser <https://lucene.apache.org/solr/guide/6_6/the-dismax-query-parser.html>`_
 that was primarily designed to be easy to use and to accept almost any input
 without returning an error.
 
@@ -613,6 +613,8 @@ page.
 
 CKAN displays the user settings page. Here you can change:
 
+* Your username
+
 * Your full name
 
 * Your e-mail address (note: this is not displayed to other users)
@@ -623,3 +625,7 @@ CKAN displays the user settings page. Here you can change:
 
 Make the changes you require and then select the "Update Profile" button.
 
+.. note::
+
+    If you change your username, CKAN will log you out. You will need to log
+    back in using your new username.

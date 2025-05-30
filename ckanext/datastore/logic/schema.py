@@ -1,13 +1,12 @@
 # encoding: utf-8
 
 import json
-from typing import Any, cast
+
+from six import string_types, text_type
+
 
 import ckan.plugins as p
 import ckan.lib.navl.dictization_functions as df
-from ckan.types import (
-    Context, FlattenDataDict, Schema, FlattenErrorDict,
-    FlattenKey, Validator, ValidatorFactory)
 
 get_validator = p.toolkit.get_validator
 
@@ -19,25 +18,20 @@ ignore_missing = get_validator('ignore_missing')
 empty = get_validator('empty')
 boolean_validator = get_validator('boolean_validator')
 int_validator = get_validator('int_validator')
-one_of = cast(ValidatorFactory, get_validator('one_of'))
+one_of = get_validator('one_of')
 unicode_only = get_validator('unicode_only')
-dict_only = get_validator('dict_only')
-default = cast(ValidatorFactory, get_validator('default'))
+default = get_validator('default')
 natural_number_validator = get_validator('natural_number_validator')
-configured_default = cast(ValidatorFactory, get_validator(
-    'configured_default'))
-limit_to_configured_maximum = cast(ValidatorFactory, get_validator(
-    'limit_to_configured_maximum'))
-unicode_safe = get_validator('unicode_safe')
+configured_default = get_validator('configured_default')
+limit_to_configured_maximum = get_validator('limit_to_configured_maximum')
 
 
-def rename(old: str, new: str) -> Validator:
+def rename(old, new):
     '''
     Rename a schema field from old to new.
     Should be used in __after or __before.
     '''
-    def rename_field(key: FlattenKey, data: FlattenDataDict,
-                     errors: FlattenErrorDict, context: Context):
+    def rename_field(key, data, errors, context):
         index = max([int(k[1]) for k in data.keys()
                      if len(k) == 3 and k[0] == new] + [-1])
 
@@ -55,25 +49,23 @@ def rename(old: str, new: str) -> Validator:
     return rename_field
 
 
-def list_of_strings_or_lists(key: FlattenKey, data: FlattenDataDict,
-                             errors: FlattenErrorDict, context: Context):
+def list_of_strings_or_lists(key, data, errors, context):
     value = data.get(key)
     if not isinstance(value, list):
         raise df.Invalid('Not a list')
     for x in value:
-        if not isinstance(x, str) and not isinstance(x, list):
+        if not isinstance(x, string_types) and not isinstance(x, list):
             raise df.Invalid('%s: %s' % ('Neither a string nor a list', x))
 
 
-def list_of_strings_or_string(key: FlattenKey, data: FlattenDataDict,
-                              errors: FlattenErrorDict, context: Context):
+def list_of_strings_or_string(key, data, errors, context):
     value = data.get(key)
-    if isinstance(value, str):
+    if isinstance(value, string_types):
         return
     list_of_strings_or_lists(key, data, errors, context)
 
 
-def json_validator(value: Any) -> Any:
+def json_validator(value, context):
     '''Validate and parse a JSON value.
 
     dicts and lists will be returned untouched, while other values
@@ -84,12 +76,12 @@ def json_validator(value: Any) -> Any:
         return value
     try:
         value = json.loads(value)
-    except (ValueError, TypeError):
+    except ValueError:
         raise df.Invalid('Cannot parse JSON')
     return value
 
 
-def unicode_or_json_validator(value: Any) -> Any:
+def unicode_or_json_validator(value, context):
     '''Return a parsed JSON object when applicable, a unicode string when not.
 
     dicts and None will be returned untouched; otherwise return a JSON object
@@ -99,28 +91,27 @@ def unicode_or_json_validator(value: Any) -> Any:
     try:
         if value is None:
             return value
-        v = json_validator(value)
+        v = json_validator(value, context)
         # json.loads will parse literals; however we want literals as unicode.
         if not isinstance(v, dict):
-            return str(value)
+            return text_type(value)
         else:
             return v
     except df.Invalid:
-        return str(value)
+        return text_type(value)
 
 
-def datastore_create_schema() -> Schema:
+def datastore_create_schema():
     schema = {
-        'resource_id': [ignore_missing, unicode_safe, resource_id_exists],
+        'resource_id': [ignore_missing, text_type, resource_id_exists],
         'force': [ignore_missing, boolean_validator],
         'id': [ignore_missing],
         'aliases': [ignore_missing, list_of_strings_or_string],
         'fields': {
-            'id': [not_empty, unicode_safe],
+            'id': [not_empty, text_type],
             'type': [ignore_missing],
             'info': [ignore_missing],
         },
-        'delete_fields': [default(False), boolean_validator],
         'primary_key': [ignore_missing, list_of_strings_or_string],
         'indexes': [ignore_missing, list_of_strings_or_string],
         'triggers': {
@@ -142,12 +133,12 @@ def datastore_create_schema() -> Schema:
     return schema
 
 
-def datastore_upsert_schema() -> Schema:
+def datastore_upsert_schema():
     schema = {
-        'resource_id': [not_missing, not_empty, unicode_safe],
+        'resource_id': [not_missing, not_empty, text_type],
         'force': [ignore_missing, boolean_validator],
         'id': [ignore_missing],
-        'method': [ignore_missing, unicode_safe, one_of(
+        'method': [ignore_missing, text_type, one_of(
             ['upsert', 'insert', 'update'])],
         'calculate_record_count': [ignore_missing, default(False),
                                    boolean_validator],
@@ -158,9 +149,9 @@ def datastore_upsert_schema() -> Schema:
     return schema
 
 
-def datastore_delete_schema() -> Schema:
+def datastore_delete_schema():
     schema = {
-        'resource_id': [not_missing, not_empty, unicode_safe],
+        'resource_id': [not_missing, not_empty, text_type],
         'force': [ignore_missing, boolean_validator],
         'id': [ignore_missing],
         'calculate_record_count': [ignore_missing, default(False),
@@ -171,28 +162,14 @@ def datastore_delete_schema() -> Schema:
     return schema
 
 
-def datastore_records_delete_schema() -> Schema:
+def datastore_search_schema():
     schema = {
-        'resource_id': [not_missing, not_empty, unicode_safe],
-        'force': [ignore_missing, boolean_validator],
-        'filters': [not_missing, dict_only],
-        'id': [ignore_missing],
-        'calculate_record_count': [ignore_missing, default(False),
-                                   boolean_validator],
-        '__junk': [empty],
-        '__before': [rename('id', 'resource_id')]
-    }
-    return schema
-
-
-def datastore_search_schema() -> Schema:
-    schema = {
-        'resource_id': [not_missing, not_empty, unicode_safe],
+        'resource_id': [not_missing, not_empty, text_type],
         'id': [ignore_missing],
         'q': [ignore_missing, unicode_or_json_validator],
         'plain': [ignore_missing, boolean_validator],
         'filters': [ignore_missing, json_validator],
-        'language': [ignore_missing, unicode_safe],
+        'language': [ignore_missing, text_type],
         'limit': [
             configured_default('ckan.datastore.search.rows_default', 100),
             natural_number_validator,
@@ -208,13 +185,12 @@ def datastore_search_schema() -> Schema:
             default(u'objects'),
             one_of([u'objects', u'lists', u'csv', u'tsv'])],
         '__junk': [empty],
-        '__before': [rename('id', 'resource_id')],
-        'full_text': [ignore_missing, unicode_safe]
+        '__before': [rename('id', 'resource_id')]
     }
     return schema
 
 
-def datastore_function_create_schema() -> Schema:
+def datastore_function_create_schema():
     return {
         'name': [unicode_only, not_empty],
         'or_replace': [default(False), boolean_validator],
@@ -228,14 +204,14 @@ def datastore_function_create_schema() -> Schema:
     }
 
 
-def datastore_function_delete_schema() -> Schema:
+def datastore_function_delete_schema():
     return {
         'name': [unicode_only, not_empty],
         'if_exists': [default(False), boolean_validator],
     }
 
 
-def datastore_analyze_schema() -> Schema:
+def datastore_analyze_schema():
     return {
-        'resource_id': [unicode_safe, resource_id_exists],
+        'resource_id': [text_type, resource_id_exists],
     }

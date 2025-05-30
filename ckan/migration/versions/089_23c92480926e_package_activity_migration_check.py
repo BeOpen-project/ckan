@@ -7,9 +7,10 @@ Create Date: 2019-05-09 13:39:17.486611
 
 """
 from __future__ import print_function
+import sys
 
 from alembic import op
-from sqlalchemy import text
+
 from ckan.migration.migrate_package_activity import num_unmigrated
 
 # revision identifiers, used by Alembic.
@@ -50,7 +51,7 @@ https://github.com/ckan/ckan/wiki/Migrate-package-activity
     else:
         # there are no unmigrated package activities
         are_any_datasets = bool(
-            conn.execute(text('SELECT 1 FROM package LIMIT 1')).scalar()
+            conn.execute(u'SELECT id FROM PACKAGE LIMIT 1').rowcount
         )
         # no need to tell the user if there are no datasets - this could just
         # be a fresh CKAN install

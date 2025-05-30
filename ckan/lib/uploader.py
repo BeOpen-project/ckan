@@ -1,5 +1,4 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import os
 import cgi
@@ -7,25 +6,26 @@ import datetime
 import logging
 import magic
 import mimetypes
-from typing import Any, IO, Optional, Union
-from urllib.parse import urlparse
+from six.moves.urllib.parse import urlparse
 
 from werkzeug.datastructures import FileStorage as FlaskFileStorage
 
 import ckan.lib.munge as munge
 import ckan.logic as logic
 import ckan.plugins as plugins
-from ckan.common import config
-from ckan.types import ErrorDict, PUploader, PResourceUploader
+from ckan.common import config, aslist
 
 ALLOWED_UPLOAD_TYPES = (cgi.FieldStorage, FlaskFileStorage)
 MB = 1 << 20
 
 log = logging.getLogger(__name__)
 
+_storage_path = None
+_max_resource_size = None
+_max_image_size = None
 
-def _copy_file(input_file: IO[bytes],
-               output_file: IO[bytes], max_size: int) -> None:
+
+def _copy_file(input_file, output_file, max_size):
     input_file.seek(0)
     current_size = 0
     while True:
@@ -40,14 +40,13 @@ def _copy_file(input_file: IO[bytes],
             raise logic.ValidationError({'upload': ['File upload too large']})
 
 
-def _get_underlying_file(wrapper: Union[FlaskFileStorage, cgi.FieldStorage]):
+def _get_underlying_file(wrapper):
     if isinstance(wrapper, FlaskFileStorage):
         return wrapper.stream
     return wrapper.file
 
 
-def get_uploader(upload_to: str,
-                 old_filename: Optional[str] = None) -> PUploader:
+def get_uploader(upload_to, old_filename=None):
     '''Query IUploader plugins and return an uploader instance for general
     files.'''
     upload = None
@@ -63,7 +62,7 @@ def get_uploader(upload_to: str,
     return upload
 
 
-def get_resource_uploader(data_dict: dict[str, Any]) -> PResourceUploader:
+def get_resource_uploader(data_dict):
     '''Query IUploader plugins and return a resource uploader instance.'''
     upload = None
     for plugin in plugins.PluginImplementations(plugins.IUploader):
@@ -78,36 +77,39 @@ def get_resource_uploader(data_dict: dict[str, Any]) -> PResourceUploader:
     return upload
 
 
-def get_storage_path() -> str:
-    '''Function to get the storage path from config file.'''
-    storage_path = config.get('ckan.storage_path')
-    if not storage_path:
-        log.critical('''Please specify a ckan.storage_path in your config
-                        for your uploads''')
+def get_storage_path():
+    '''Function to cache storage path'''
+    global _storage_path
 
-    return storage_path
+    # None means it has not been set. False means not in config.
+    if _storage_path is None:
+        storage_path = config.get('ckan.storage_path')
+        if storage_path:
+            _storage_path = storage_path
+        else:
+            log.critical('''Please specify a ckan.storage_path in your config
+                         for your uploads''')
+            _storage_path = False
+
+    return _storage_path
 
 
-def get_max_image_size() -> int:
-    return config.get('ckan.max_image_size')
+def get_max_image_size():
+    global _max_image_size
+    if _max_image_size is None:
+        _max_image_size = int(config.get('ckan.max_image_size', 2))
+    return _max_image_size
 
 
-def get_max_resource_size() -> int:
-    return config.get('ckan.max_resource_size')
+def get_max_resource_size():
+    global _max_resource_size
+    if _max_resource_size is None:
+        _max_resource_size = int(config.get('ckan.max_resource_size', 10))
+    return _max_resource_size
 
 
 class Upload(object):
-    storage_path: Optional[str]
-    filename: Optional[str]
-    filepath: Optional[str]
-    object_type: Optional[str]
-    old_filename: Optional[str]
-    old_filepath: Optional[str]
-    upload_file: Optional[IO[bytes]]
-
-    def __init__(self,
-                 object_type: str,
-                 old_filename: Optional[str] = None) -> None:
+    def __init__(self, object_type, old_filename=None):
         ''' Setup upload by creating a subdirectory of the storage directory
         of name object_type. old_filename is the name of the file in the url
         field last time'''
@@ -136,8 +138,7 @@ class Upload(object):
         if old_filename:
             self.old_filepath = os.path.join(self.storage_path, old_filename)
 
-    def update_data_dict(self, data_dict: dict[str, Any], url_field: str,
-                         file_field: str, clear_field: str) -> None:
+    def update_data_dict(self, data_dict, url_field, file_field, clear_field):
         ''' Manipulate data from the data_dict.  url_field is the name of the
         field where the upload is going to be. file_field is name of the key
         where the FieldStorage is kept (i.e the field where the file data
@@ -170,7 +171,7 @@ class Upload(object):
             if self.clear and self.url == self.old_filename:
                 data_dict[url_field] = ''
 
-    def upload(self, max_size: int = 2) -> None:
+    def upload(self, max_size=2):
         ''' Actually upload the file.
         This should happen just before a commit but after the data has
         been validated and flushed to the db. This is so we do not store
@@ -180,8 +181,6 @@ class Upload(object):
         self.verify_type()
 
         if self.filename:
-            assert self.upload_file and self.filepath
-
             with open(self.tmp_filepath, 'wb+') as output_file:
                 try:
                     _copy_file(self.upload_file, output_file, max_size)
@@ -194,29 +193,38 @@ class Upload(object):
             self.clear = True
 
         if (self.clear and self.old_filename
-                and not self.old_filename.startswith('http')
-                and self.old_filepath):
+                and not self.old_filename.startswith('http')):
             try:
                 os.remove(self.old_filepath)
             except OSError:
                 pass
 
     def verify_type(self):
-        if not self.filename or not self.upload_file:
+        if not self.filename:
             return
 
-        mimetypes = config.get(
-            f"ckan.upload.{self.object_type}.mimetypes")
-        types = config.get(f"ckan.upload.{self.object_type}.types")
+        mimetypes = aslist(
+            config.get(
+                "ckan.upload.{}.mimetypes".format(self.object_type),
+                ["image/png", "image/gif", "image/jpeg"]
+            )
+        )
+
+        types = aslist(
+            config.get(
+                "ckan.upload.{}.types".format(self.object_type),
+                ["image"]
+            )
+        )
+
         if not mimetypes and not types:
             return
 
         # 2KB required for detecting xlsx mimetype
         actual = magic.from_buffer(self.upload_file.read(2048), mime=True)
         self.upload_file.seek(0, os.SEEK_SET)
-        err: ErrorDict = {
-            self.file_field: [f"Unsupported upload type: {actual}"]
-        }
+        err = {self.file_field: [
+            "Unsupported upload type: {actual}".format(actual=actual)]}
 
         if mimetypes and actual not in mimetypes:
             raise logic.ValidationError(err)
@@ -227,11 +235,9 @@ class Upload(object):
 
 
 class ResourceUpload(object):
-    mimetype: Optional[str]
-
-    def __init__(self, resource: dict[str, Any]) -> None:
+    def __init__(self, resource):
         path = get_storage_path()
-        config_mimetype_guess = config.get('ckan.mimetype_guess')
+        config_mimetype_guess = config.get('ckan.mimetype_guess', 'file_ext')
 
         if not path:
             self.storage_path = None
@@ -259,13 +265,11 @@ class ResourceUpload(object):
             self.filesize = 0  # bytes
 
             self.filename = upload_field_storage.filename
-            assert self.filename is not None
             self.filename = munge.munge_filename(self.filename)
             resource['url'] = self.filename
             resource['url_type'] = 'upload'
             resource['last_modified'] = datetime.datetime.utcnow()
             self.upload_file = _get_underlying_file(upload_field_storage)
-            assert self.upload_file is not None
             self.upload_file.seek(0, os.SEEK_END)
             self.filesize = self.upload_file.tell()
             # go back to the beginning of the file buffer
@@ -280,26 +284,22 @@ class ResourceUpload(object):
                     self.mimetype = magic.from_buffer(self.upload_file.read(),
                                                       mime=True)
                     self.upload_file.seek(0, os.SEEK_SET)
-                except IOError:
+                except IOError as e:
                     # Not that important if call above fails
                     self.mimetype = None
 
         elif self.clear:
             resource['url_type'] = ''
 
-    def get_directory(self, id: str) -> str:
-        if self.storage_path is None:
-            raise TypeError("storage_path is not defined")
-
+    def get_directory(self, id):
         real_storage = os.path.realpath(self.storage_path)
         directory = os.path.join(real_storage, id[0:3], id[3:6])
         if directory != os.path.realpath(directory):
-            raise logic.ValidationError({
-                'upload': ['Invalid storage directory']
-            })
+            raise logic.ValidationError(
+                {'upload': ['Invalid storage directory']})
         return directory
 
-    def get_path(self, id: str) -> str:
+    def get_path(self, id):
         directory = self.get_directory(id)
         filepath = os.path.join(directory, id[6:])
 
@@ -308,7 +308,7 @@ class ResourceUpload(object):
 
         return filepath
 
-    def upload(self, id: str, max_size: int = 10) -> None:
+    def upload(self, id, max_size=10):
         '''Actually upload the file.
 
         :returns: ``'file uploaded'`` if a new file was successfully uploaded
@@ -339,7 +339,6 @@ class ResourceUpload(object):
                     raise
             tmp_filepath = filepath + '~'
             with open(tmp_filepath, 'wb+') as output_file:
-                assert self.upload_file
                 try:
                     _copy_file(self.upload_file, output_file, max_size)
                 except logic.ValidationError:
@@ -358,5 +357,5 @@ class ResourceUpload(object):
         if self.clear:
             try:
                 os.remove(filepath)
-            except OSError:
+            except OSError as e:
                 pass

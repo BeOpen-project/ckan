@@ -1,11 +1,11 @@
 const path = require("path");
 const { src, watch, dest, parallel } = require("gulp");
-const sass = require("gulp-sass")(require("sass"));
+const less = require("gulp-less");
 const if_ = require("gulp-if");
 const sourcemaps = require("gulp-sourcemaps");
 const rename = require("gulp-rename");
 
-const with_sourcemaps = () => !!process.env.DEBUG || !!process.argv[4];
+const with_sourcemaps = () => !!process.env.DEBUG;
 const renamer = (path) => {
   const variant = process.argv[3];
   if (variant) {
@@ -17,18 +17,18 @@ const renamer = (path) => {
 
 const build = () =>
   src([
-    __dirname + "/ckan/public/base/scss/main.scss",
-    __dirname + "/ckan/public/base/scss/main-rtl.scss",
-    ])
+    __dirname + "/ckan/public/base/less/main.less",
+    __dirname + "/ckan/public/base/less/main-rtl.less",
+  ])
     .pipe(if_(with_sourcemaps(), sourcemaps.init()))
-    .pipe(sass({ outputStyle: 'expanded' }).on('error', sass.logError))
+    .pipe(less())
     .pipe(if_(with_sourcemaps(), sourcemaps.write()))
     .pipe(rename(renamer))
     .pipe(dest(__dirname + "/ckan/public/base/css/"));
 
 const watchSource = () =>
   watch(
-    __dirname + "/ckan/public/base/scss/**/*.scss",
+    __dirname + "/ckan/public/base/less/**/*.less",
     { ignoreInitial: false },
     build
   );
@@ -38,39 +38,34 @@ const jquery = () =>
     dest(__dirname + "/ckan/public/base/vendor")
   );
 
-const bootstrapScss = () =>
-  src([__dirname + "/node_modules/bootstrap/scss/**/*", ]).pipe(
-    dest(__dirname + "/ckan/public/base/vendor/bootstrap/scss")
+const bootstrap = () =>
+  src(__dirname + "/node_modules/bootstrap/dist/**/*").pipe(
+    dest(__dirname + "/ckan/public/base/vendor/bootstrap")
   );
 
-const bootstrapJS = () =>
-src([__dirname + "/node_modules/bootstrap/js/dist/**/*",
-    __dirname + "/node_modules/bootstrap/dist/js/**/*"
-  ]).pipe(dest(__dirname + "/ckan/public/base/vendor/bootstrap/js"));
+const bootstrapLess = () =>
+  src(__dirname + "/node_modules/bootstrap/less/**/*").pipe(
+    dest(__dirname + "/ckan/public/base/vendor/bootstrap/less")
+  );
 
 const moment = () =>
   src(__dirname + "/node_modules/moment/min/moment-with-locales.js").pipe(
     dest(__dirname + "/ckan/public/base/vendor")
   );
 
-const popOver = () =>
-  src(__dirname + "/node_modules/@popperjs/core/dist/cjs/popper.js").pipe(
-    dest(__dirname + "/ckan/public/base/vendor/")
-);
-
-const DOMPurify = () =>
-  src(__dirname + "/node_modules/dompurify/dist/purify.js").pipe(
-    dest(__dirname + "/ckan/public/base/vendor/")
-);
-
 const fontAwesomeCss = () =>
-  src(__dirname + "/node_modules/@fortawesome/fontawesome-free/css/all.css").pipe(
-    dest(__dirname + "/ckan/public/base/vendor/fontawesome-free/css")
+  src(__dirname + "/node_modules/font-awesome/css/font-awesome.css").pipe(
+    dest(__dirname + "/ckan/public/base/vendor/font-awesome/css")
   );
 
 const fontAwesomeFonts = () =>
-  src(__dirname + "/node_modules/@fortawesome/fontawesome-free/webfonts/*").pipe(
-    dest(__dirname + "/ckan/public/base/vendor/fontawesome-free/webfonts")
+  src(__dirname + "/node_modules/font-awesome/fonts/*").pipe(
+    dest(__dirname + "/ckan/public/base/vendor/font-awesome/fonts")
+  );
+
+const fontAwesomeLess = () =>
+  src(__dirname + "/node_modules/font-awesome/less/*").pipe(
+    dest(__dirname + "/ckan/public/base/vendor/font-awesome/less")
   );
 
 const jQueryFileUpload = () =>
@@ -83,23 +78,16 @@ const qs = () =>
     dest(__dirname + "/ckan/public/base/vendor/")
   )
 
-const htmx = () =>
-src(__dirname + "/node_modules/htmx.org/dist/htmx.js").pipe(
-  dest(__dirname + "/ckan/public/base/vendor/")
-)
-
 exports.build = build;
 exports.watch = watchSource;
 exports.updateVendorLibs = parallel(
   jquery,
-  bootstrapScss,
-  bootstrapJS,
+  bootstrap,
+  bootstrapLess,
   moment,
   fontAwesomeCss,
   fontAwesomeFonts,
+  fontAwesomeLess,
   jQueryFileUpload,
-  qs,
-  DOMPurify,
-  popOver,
-  htmx
+  qs
 );

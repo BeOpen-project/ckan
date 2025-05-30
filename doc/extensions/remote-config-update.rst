@@ -41,6 +41,7 @@ First of all, let's call the :py:func:`~ckan.logic.action.get.config_option_list
             "ckan.site_logo",
             "ckan.site_description",
             "ckan.site_intro_text",
+            "ckan.homepage_style",
             "ckan.hola"
         ],
         "success": true
@@ -77,6 +78,7 @@ Restart the web server and do another request to the :py:func:`~ckan.logic.actio
             "ckan.site_logo",
             "ckan.site_description",
             "ckan.site_intro_text",
+            "ckan.homepage_style",
             "ckan.hola"
         ],
         "success": true

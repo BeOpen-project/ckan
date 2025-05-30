@@ -1,9 +1,5 @@
 # encoding: utf-8
-from __future__ import annotations
 
-from ckan.common import CKANConfig
-from typing import Any, cast
-from ckan.types import Context, Schema, Validator, ValidatorFactory
 import logging
 
 import ckan.plugins as plugins
@@ -19,7 +15,7 @@ def create_country_codes():
 
     '''
     user = tk.get_action('get_site_user')({'ignore_auth': True}, {})
-    context: Context = {'user': user['name']}
+    context = {'user': user['name']}
     try:
         data = {'id': 'country_codes'}
         tk.get_action('vocabulary_show')(context, data)
@@ -31,25 +27,23 @@ def create_country_codes():
         for tag in (u'uk', u'ie', u'de', u'fr', u'es'):
             logging.info(
                     "Adding tag {0} to vocab 'country_codes'".format(tag))
-            data: dict[str, str] = {'name': tag, 'vocabulary_id': vocab['id']}
+            data = {'name': tag, 'vocabulary_id': vocab['id']}
             tk.get_action('tag_create')(context, data)
 
 
-def country_codes_helper():
+def country_codes():
     '''Return the list of country codes from the country codes vocabulary.'''
     create_country_codes()
     try:
         country_codes = tk.get_action('tag_list')(
-                {}, {'vocabulary_id': 'country_codes'})
+                data_dict={'vocabulary_id': 'country_codes'})
         return country_codes
     except tk.ObjectNotFound:
         return None
 
 
-class ExampleIDatasetFormPlugin(
-        tk.DefaultDatasetForm,
-        plugins.SingletonPlugin,
-):
+class ExampleIDatasetFormPlugin(plugins.SingletonPlugin,
+        tk.DefaultDatasetForm):
     '''An example IDatasetForm CKAN plugin.
 
     Uses a tag vocabulary to add a custom metadata field to datasets.
@@ -67,35 +61,32 @@ class ExampleIDatasetFormPlugin(
     num_times_search_template_called = 0
     num_times_history_template_called = 0
     num_times_package_form_called = 0
+    num_times_check_data_dict_called = 0
     num_times_setup_template_variables_called = 0
 
-    def update_config(self, config: CKANConfig):
+    def update_config(self, config):
         # Add this plugin's templates dir to CKAN's extra_template_paths, so
         # that CKAN will use this plugin's custom templates.
         tk.add_template_directory(config, 'templates')
 
     def get_helpers(self):
-        return {'country_codes': country_codes_helper}
+        return {'country_codes': country_codes}
 
     def is_fallback(self):
         # Return True to register this plugin as the default handler for
         # package types not handled by any other IDatasetForm plugin.
         return True
 
-    def package_types(self) -> list[str]:
+    def package_types(self):
         # This plugin doesn't handle any special package types, it just
         # registers itself as the default (above).
         return []
 
-    def _modify_package_schema(self, schema: Schema):
+    def _modify_package_schema(self, schema):
         # Add our custom country_code metadata field to the schema.
-
         schema.update({
-                'country_code': [
-                    tk.get_validator('ignore_missing'),
-                    cast(
-                        ValidatorFactory,
-                        tk.get_converter('convert_to_tags'))('country_codes')]
+                'country_code': [tk.get_validator('ignore_missing'),
+                    tk.get_converter('convert_to_tags')('country_codes')]
                 })
         # Add our custom_test metadata field to the schema, this one will use
         # convert_to_extras instead of convert_to_tags.
@@ -104,39 +95,32 @@ class ExampleIDatasetFormPlugin(
                     tk.get_converter('convert_to_extras')]
                 })
         # Add our custom_resource_text metadata field to the schema
-        cast(Schema, schema['resources']).update({
+        schema['resources'].update({
                 'custom_resource_text' : [ tk.get_validator('ignore_missing') ]
                 })
         return schema
 
     def create_package_schema(self):
-        schema: Schema = super(
-            ExampleIDatasetFormPlugin, self).create_package_schema()
+        schema = super(ExampleIDatasetFormPlugin, self).create_package_schema()
         schema = self._modify_package_schema(schema)
         return schema
 
     def update_package_schema(self):
-        schema: Schema = super(
-            ExampleIDatasetFormPlugin, self).update_package_schema()
+        schema = super(ExampleIDatasetFormPlugin, self).update_package_schema()
         schema = self._modify_package_schema(schema)
         return schema
 
-    def show_package_schema(self) -> Schema:
-        schema: Schema = super(
-            ExampleIDatasetFormPlugin, self).show_package_schema()
+    def show_package_schema(self):
+        schema = super(ExampleIDatasetFormPlugin, self).show_package_schema()
 
         # Don't show vocab tags mixed in with normal 'free' tags
         # (e.g. on dataset pages, or on the search page)
-        _extras = cast("list[Validator]",
-                       cast(Schema, schema['tags'])['__extras'])
-        _extras.append(tk.get_converter('free_tags_only'))
+        schema['tags']['__extras'].append(tk.get_converter('free_tags_only'))
 
         # Add our custom country_code metadata field to the schema.
         schema.update({
             'country_code': [
-                cast(
-                    ValidatorFactory,
-                    tk.get_converter('convert_from_tags'))('country_codes'),
+                tk.get_converter('convert_from_tags')('country_codes'),
                 tk.get_validator('ignore_missing')]
             })
 
@@ -146,7 +130,7 @@ class ExampleIDatasetFormPlugin(
                 tk.get_validator('ignore_missing')]
             })
 
-        cast(Schema, schema['resources']).update({
+        schema['resources'].update({
                 'custom_resource_text' : [ tk.get_validator('ignore_missing') ]
             })
         return schema
@@ -157,44 +141,36 @@ class ExampleIDatasetFormPlugin(
     # these methods are actually used, not just that the methods get
     # called.
 
-    def setup_template_variables(
-            self, context: Context, data_dict: dict[str, Any]) -> Any:
+    def setup_template_variables(self, context, data_dict):
         ExampleIDatasetFormPlugin.num_times_setup_template_variables_called += 1
         return super(ExampleIDatasetFormPlugin, self).setup_template_variables(
                 context, data_dict)
 
-    def new_template(self) -> Any:
+    def new_template(self):
         ExampleIDatasetFormPlugin.num_times_new_template_called += 1
         return super(ExampleIDatasetFormPlugin, self).new_template()
 
-    def read_template(self) -> Any:
+    def read_template(self):
         ExampleIDatasetFormPlugin.num_times_read_template_called += 1
         return super(ExampleIDatasetFormPlugin, self).read_template()
 
-    def edit_template(self) -> Any:
+    def edit_template(self):
         ExampleIDatasetFormPlugin.num_times_edit_template_called += 1
         return super(ExampleIDatasetFormPlugin, self).edit_template()
 
-    def search_template(self) -> Any:
+    def search_template(self):
         ExampleIDatasetFormPlugin.num_times_search_template_called += 1
         return super(ExampleIDatasetFormPlugin, self).search_template()
 
-    def history_template(self) -> Any:
+    def history_template(self):
         ExampleIDatasetFormPlugin.num_times_history_template_called += 1
         return super(ExampleIDatasetFormPlugin, self).history_template()
 
-    def package_form(self) -> Any:
+    def package_form(self):
         ExampleIDatasetFormPlugin.num_times_package_form_called += 1
         return super(ExampleIDatasetFormPlugin, self).package_form()
 
-
-class ExampleIDatasetFormInheritPlugin(plugins.SingletonPlugin,
-        tk.DefaultDatasetForm):
-    """An example IDatasetForm CKAN plugin, inheriting all methods
-    from the default interface.
-    """
-    plugins.implements(plugins.IDatasetForm, inherit=True)
-
-    def package_types(self):
-
-        return ["custom_dataset"]
+    # check_data_dict() is deprecated, this method is only here to test that
+    # legacy support for the deprecated method works.
+    def check_data_dict(self, data_dict, schema=None):
+        ExampleIDatasetFormPlugin.num_times_check_data_dict_called += 1

@@ -6,14 +6,10 @@ from ckan.logic import (
     get_action as _get_action,
     check_access as _check_access,
     get_or_bust as _get_or_bust,
-    fresh_context as _fresh_context
 )
-from ckan.types import Context, DataDict
-from ckan.types.logic import ActionResult
 
 
-def package_patch(
-        context: Context, data_dict: DataDict) -> ActionResult.PackagePatch:
+def package_patch(context, data_dict):
     '''Patch a dataset (package).
 
     :param id: the id or name of the dataset
@@ -24,23 +20,25 @@ def package_patch(
     parameters unchanged, whereas the update methods deletes all parameters
     not explicitly provided in the data_dict.
 
-    To partially update resources or other metadata not at the top level
-    of a package use
-    :py:func:`~ckan.logic.action.update.package_revise` instead to maintain
-    existing nested values.
+    You are able to partially update and/or create resources with
+    package_patch. If you are updating existing resources be sure to provide
+    the resource id. Existing resources excluded from the package_patch
+    data_dict will be removed. Resources in the package data_dict without
+    an id will be treated as new resources and will be added. New resources
+    added with the patch method do not create the default views.
 
     You must be authorized to edit the dataset and the groups that it belongs
     to.
     '''
     _check_access('package_patch', context, data_dict)
 
-    show_context: Context = {
+    show_context = {
         'model': context['model'],
         'session': context['session'],
         'user': context['user'],
         'auth_user_obj': context['auth_user_obj'],
         'ignore_auth': context.get('ignore_auth', False),
-        'for_update': True
+        'for_update': True,
     }
 
     package_dict = _get_action('package_show')(
@@ -53,8 +51,7 @@ def package_patch(
     return _get_action('package_update')(context, patched)
 
 
-def resource_patch(context: Context,
-                   data_dict: DataDict) -> ActionResult.ResourcePatch:
+def resource_patch(context, data_dict):
     '''Patch a resource
 
     :param id: the id of the resource
@@ -67,8 +64,13 @@ def resource_patch(context: Context,
     '''
     _check_access('resource_patch', context, data_dict)
 
-    show_context: Context = _fresh_context(context)
-    show_context.update({'for_update': True})
+    show_context = {
+        'model': context['model'],
+        'session': context['session'],
+        'user': context['user'],
+        'auth_user_obj': context['auth_user_obj'],
+        'for_update': True,
+    }
 
     resource_dict = _get_action('resource_show')(
         show_context,
@@ -79,8 +81,7 @@ def resource_patch(context: Context,
     return _get_action('resource_update')(context, patched)
 
 
-def group_patch(context: Context,
-                data_dict: DataDict) -> ActionResult.GroupPatch:
+def group_patch(context, data_dict):
     '''Patch a group
 
     :param id: the id or name of the group
@@ -93,7 +94,12 @@ def group_patch(context: Context,
     '''
     _check_access('group_patch', context, data_dict)
 
-    show_context: Context = _fresh_context(context)
+    show_context = {
+        'model': context['model'],
+        'session': context['session'],
+        'user': context['user'],
+        'auth_user_obj': context['auth_user_obj'],
+    }
 
     group_dict = _get_action('group_show')(
         show_context,
@@ -108,9 +114,7 @@ def group_patch(context: Context,
     return _get_action('group_update')(patch_context, patched)
 
 
-def organization_patch(
-        context: Context,
-        data_dict: DataDict) -> ActionResult.OrganizationPatch:
+def organization_patch(context, data_dict):
     '''Patch an organization
 
     :param id: the id or name of the organization
@@ -123,7 +127,12 @@ def organization_patch(
     '''
     _check_access('organization_patch', context, data_dict)
 
-    show_context: Context = _fresh_context(context)
+    show_context = {
+        'model': context['model'],
+        'session': context['session'],
+        'user': context['user'],
+        'auth_user_obj': context['auth_user_obj'],
+    }
 
     organization_dict = _get_action('organization_show')(
         show_context,
@@ -138,13 +147,10 @@ def organization_patch(
     return _get_action('organization_update')(patch_context, patched)
 
 
-def user_patch(context: Context,
-               data_dict: DataDict) -> ActionResult.UserPatch:
+def user_patch(context, data_dict):
     '''Patch a user
-
     :param id: the id or name of the user
     :type id: string
-
     The difference between the update and patch methods is that the patch will
     perform an update of the provided parameters, while leaving all other
     parameters unchanged, whereas the update methods deletes all parameters
@@ -152,7 +158,12 @@ def user_patch(context: Context,
     '''
     _check_access('user_patch', context, data_dict)
 
-    show_context: Context = _fresh_context(context)
+    show_context = {
+        'model': context['model'],
+        'session': context['session'],
+        'user': context['user'],
+        'auth_user_obj': context['auth_user_obj'],
+    }
 
     user_dict = _get_action('user_show')(
         show_context,

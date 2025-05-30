@@ -1,10 +1,10 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import click
 
 import ckan.lib.jobs as bg_jobs
 import ckan.logic as logic
+import ckan.plugins as p
 from ckan.cli import error_shout
 
 
@@ -15,11 +15,8 @@ def jobs():
 
 @jobs.command(short_help=u"Start a worker.",)
 @click.option(u"--burst", is_flag=True, help=u"Start worker in burst mode.")
-@click.option(u"--max-idle-time", default=None, type=click.INT,
-              help=u"Max seconds for worker to be idle. "
-              "Defaults to None (never stops idling).")
 @click.argument(u"queues", nargs=-1)
-def worker(burst: bool, max_idle_time: int, queues: list[str]):
+def worker(burst, queues):
     """Start a worker that fetches jobs from queues and executes them. If
     no queue names are given then the worker listens to the default
     queue, this is equivalent to
@@ -38,50 +35,35 @@ def worker(burst: bool, max_idle_time: int, queues: list[str]):
 
     If the `--burst` option is given then the worker will exit as soon
     as all its queues are empty.
-
-    If the `--max-idle-time` option is given then the worker will exit
-    after it has been idle for the number of seconds specified.
     """
-    bg_jobs.Worker(queues).work(burst=burst, max_idle_time=max_idle_time)
+    bg_jobs.Worker(queues).work(burst=burst)
 
 
 @jobs.command(name=u"list", short_help=u"List jobs.")
-@click.option("-l", "--limit", type=click.INT,
-              help="Number of jobs to return. Default: %s" %
-              bg_jobs.DEFAULT_JOB_LIST_LIMIT,
-              default=bg_jobs.DEFAULT_JOB_LIST_LIMIT)
-@click.option("-i", "--ids", is_flag=True, type=click.BOOL,
-              help="Only return a list of job ids.", default=False)
 @click.argument(u"queues", nargs=-1)
-def list_jobs(queues: list[str],
-              limit: int = bg_jobs.DEFAULT_JOB_LIST_LIMIT, ids: bool = False):
+def list_jobs(queues):
     """List currently enqueued jobs from the given queues. If no queue
     names are given then the jobs from all queues are listed.
     """
     data_dict = {
         u"queues": list(queues),
-        "limit": limit,
-        "ids_only": ids,
     }
-    jobs = logic.get_action(u"job_list")({u"ignore_auth": True}, data_dict)
+    jobs = p.toolkit.get_action(u"job_list")({u"ignore_auth": True}, data_dict)
     if not jobs:
         return click.secho(u"There are no pending jobs.", fg=u"green")
     for job in jobs:
-        if ids:
-            click.secho(job)
+        if job[u"title"] is None:
+            job[u"title"] = u""
         else:
-            if job[u"title"] is None:
-                job[u"title"] = u""
-            else:
-                job[u"title"] = u'"{}"'.format(job[u"title"])
-            click.secho(u"{created} {id} {queue} {title}".format(**job))
+            job[u"title"] = u'"{}"'.format(job[u"title"])
+        click.secho(u"{created} {id} {queue} {title}".format(**job))
 
 
 @jobs.command(short_help=u"Show details about a specific job.")
 @click.argument(u"id")
-def show(id: str):
+def show(id):
     try:
-        job = logic.get_action(u"job_show")(
+        job = p.toolkit.get_action(u"job_show")(
             {u"ignore_auth": True}, {u"id": id}
         )
     except logic.NotFound:
@@ -100,14 +82,14 @@ def show(id: str):
 
 @jobs.command(short_help=u"Cancel a specific job.")
 @click.argument(u"id")
-def cancel(id: str):
+def cancel(id):
     """Cancel a specific job. Jobs can only be canceled while they are
     enqueued. Once a worker has started executing a job it cannot be
     aborted anymore.
 
     """
     try:
-        logic.get_action(u"job_cancel")(
+        p.toolkit.get_action(u"job_cancel")(
             {u"ignore_auth": True}, {u"id": id}
         )
     except logic.NotFound:
@@ -119,7 +101,7 @@ def cancel(id: str):
 
 @jobs.command(short_help=u"Cancel all jobs.")
 @click.argument(u"queues", nargs=-1)
-def clear(queues: list[str]):
+def clear(queues):
     """Cancel all jobs on the given queues. If no queue names are given
     then ALL queues are cleared.
 
@@ -127,16 +109,16 @@ def clear(queues: list[str]):
     data_dict = {
         u"queues": list(queues),
     }
-    queues = logic.get_action(u"job_clear")(
+    queues = p.toolkit.get_action(u"job_clear")(
         {u"ignore_auth": True}, data_dict
     )
-    queues = [u'"{}"'.format(q) for q in queues]
+    queues = (u'"{}"'.format(q) for q in queues)
     click.secho(u"Cleared queue(s) {}".format(u", ".join(queues)), fg=u"green")
 
 
 @jobs.command(short_help=u"Enqueue a test job.")
 @click.argument(u"queues", nargs=-1)
-def test(queues: list[str]):
+def test(queues):
     """Enqueue a test job. If no queue names are given then the job is
     added to the default queue. If queue names are given then a
     separate test job is added to each of the queues.

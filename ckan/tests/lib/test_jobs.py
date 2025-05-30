@@ -76,18 +76,17 @@ class TestEnqueue(RQTestBase):
             jobs.add_queue_name_prefix(u"my_queue")
         ])
 
-    def test_enqueue_timeout(self, monkeypatch, ckan_config):
+    def test_enqueue_timeout(self):
         self.enqueue()
+        self.enqueue(rq_kwargs={u'timeout': 0})
         self.enqueue(rq_kwargs={u'timeout': -1})
         self.enqueue(rq_kwargs={u'timeout': 3600})
-        monkeypatch.setitem(ckan_config, u'ckan.jobs.timeout', 10)
-        self.enqueue()
         all_jobs = self.all_jobs()
         assert len(all_jobs) == 4
         assert all_jobs[0].timeout == 180
-        assert all_jobs[1].timeout == -1
-        assert all_jobs[2].timeout == 3600
-        assert all_jobs[3].timeout == 10
+        assert all_jobs[1].timeout == 180
+        assert all_jobs[2].timeout == -1
+        assert all_jobs[3].timeout == 3600
 
 
 class TestGetAllQueues(RQTestBase):
@@ -192,7 +191,7 @@ class TestWorker(RQTestBase):
         u"""
         Test that exceptions in a job are logged.
         """
-        self.enqueue(failing_job)
+        job = self.enqueue(failing_job)
         worker = jobs.Worker()
 
         # Prevent worker from forking so that we can capture log

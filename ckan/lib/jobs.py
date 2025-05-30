@@ -17,11 +17,9 @@ prefixed names. Use the functions ``add_queue_name_prefix`` and
 
 .. versionadded:: 2.7
 '''
-from __future__ import annotations
+from __future__ import print_function
 
 import logging
-from typing import Any, Union, Callable, Iterable, Optional, cast
-from redis import Redis
 
 import rq
 from rq.connections import push_connection
@@ -35,16 +33,17 @@ from ckan.config.environment import load_environment
 from ckan.model import meta
 import ckan.plugins as plugins
 
+
 log = logging.getLogger(__name__)
 
 DEFAULT_QUEUE_NAME = u'default'
-DEFAULT_JOB_LIST_LIMIT = 200
+DEFAULT_JOB_TIMEOUT = config.get(u'ckan.jobs.timeout', 180)
 
 # RQ job queues. Do not use this directly, use ``get_queue`` instead.
-_queues: dict[str, rq.Queue] = {}
+_queues = {}
 
 
-def _connect() -> Redis:
+def _connect():
     u'''
     Connect to Redis and tell RQ about it.
 
@@ -55,7 +54,7 @@ def _connect() -> Redis:
     return conn
 
 
-def _get_queue_name_prefix() -> str:
+def _get_queue_name_prefix():
     u'''
     Get the queue name prefix.
     '''
@@ -63,7 +62,7 @@ def _get_queue_name_prefix() -> str:
     return u'ckan:{}:'.format(config[u'ckan.site_id'])
 
 
-def add_queue_name_prefix(name: str) -> str:
+def add_queue_name_prefix(name):
     u'''
     Prefix a queue name.
 
@@ -72,7 +71,7 @@ def add_queue_name_prefix(name: str) -> str:
     return _get_queue_name_prefix() + name
 
 
-def remove_queue_name_prefix(name: str) -> str:
+def remove_queue_name_prefix(name):
     u'''
     Remove a queue name's prefix.
 
@@ -86,7 +85,7 @@ def remove_queue_name_prefix(name: str) -> str:
     return name[len(prefix):]
 
 
-def get_all_queues() -> list[rq.Queue]:
+def get_all_queues():
     u'''
     Return all job queues currently in use.
 
@@ -101,7 +100,7 @@ def get_all_queues() -> list[rq.Queue]:
             q.name.startswith(prefix)]
 
 
-def get_queue(name: str = DEFAULT_QUEUE_NAME) -> rq.Queue:
+def get_queue(name=DEFAULT_QUEUE_NAME):
     u'''
     Get a job queue.
 
@@ -126,12 +125,8 @@ def get_queue(name: str = DEFAULT_QUEUE_NAME) -> rq.Queue:
         return queue
 
 
-def enqueue(fn: Callable[..., Any],
-            args: Optional[Union[tuple[Any], list[Any], None]] = None,
-            kwargs: Optional[dict[str, Any]] = None,
-            title: Optional[str] = None,
-            queue: str = DEFAULT_QUEUE_NAME,
-            rq_kwargs: Optional[dict[str, Any]] = None) -> Job:
+def enqueue(fn, args=None, kwargs=None, title=None, queue=DEFAULT_QUEUE_NAME,
+            rq_kwargs=None):
     u'''
     Enqueue a job to be run in the background.
 
@@ -162,14 +157,11 @@ def enqueue(fn: Callable[..., Any],
         kwargs = {}
     if rq_kwargs is None:
         rq_kwargs = {}
-    timeout = config.get(u'ckan.jobs.timeout')
-    rq_kwargs[u'timeout'] = rq_kwargs.get(u'timeout', timeout)
+    rq_kwargs[u'timeout'] = rq_kwargs.get(u'timeout', DEFAULT_JOB_TIMEOUT)
 
     job = get_queue(queue).enqueue_call(
         func=fn, args=args, kwargs=kwargs, **rq_kwargs)
-    if not job.meta:
-        job.meta = {}
-    job.meta["title"] = title
+    job.meta[u'title'] = title
     job.save()
     msg = u'Added background job {}'.format(job.id)
     if title:
@@ -179,7 +171,7 @@ def enqueue(fn: Callable[..., Any],
     return job
 
 
-def job_from_id(id: str) -> Job:
+def job_from_id(id):
     u'''
     Look up an enqueued job by its ID.
 
@@ -196,7 +188,7 @@ def job_from_id(id: str) -> Job:
         raise KeyError(u'There is no job with ID "{}".'.format(id))
 
 
-def dictize_job(job: Job) -> dict[str, Any]:
+def dictize_job(job):
     u'''Convert a job to a dict.
 
     In contrast to ``rq.job.Job.to_dict`` this function includes only
@@ -208,19 +200,15 @@ def dictize_job(job: Job) -> dict[str, Any]:
     :returns: The dictized job.
     :rtype: dict
     '''
-    assert job.created_at
-    assert job.origin is not None
-    if not job.meta:
-        job.meta = {}
     return {
-        "id": job.id,
-        "title": job.meta.get("title"),
-        "created": job.created_at.strftime("%Y-%m-%dT%H:%M:%S"),
-        "queue": remove_queue_name_prefix(job.origin),
+        u'id': job.id,
+        u'title': job.meta.get(u'title'),
+        u'created': job.created_at.strftime(u'%Y-%m-%dT%H:%M:%S'),
+        u'queue': remove_queue_name_prefix(job.origin),
     }
 
 
-def test_job(*args: Any) -> None:
+def test_job(*args):
     u'''Test job.
 
     A test job for debugging purposes. Prints out any arguments it
@@ -241,10 +229,7 @@ class Worker(rq.Worker):
     non-committed changes are rolled back and instance variables bound
     to the old session have to be re-fetched from the database.
     '''
-    def __init__(self,
-                 queues: Optional[Iterable[str]] = None,
-                 *args: Any,
-                 **kwargs: Any) -> None:
+    def __init__(self, queues=None, *args, **kwargs):
         u'''
         Constructor.
 
@@ -256,23 +241,20 @@ class Worker(rq.Worker):
             with the name of a single queue or a list of queue names.
             If not given then the default queue is used.
         '''
-        queue_names = cast(Iterable[str], ensure_list(
-            queues or [DEFAULT_QUEUE_NAME]
-        ))
-
-        qs = [get_queue(q) for q in queue_names]
+        queues = queues or [DEFAULT_QUEUE_NAME]
+        queues = [get_queue(q) for q in ensure_list(queues)]
         rq.worker.logger.setLevel(logging.INFO)
-        super(Worker, self).__init__(qs, *args, **kwargs)
+        super(Worker, self).__init__(queues, *args, **kwargs)
 
-    def register_birth(self, *args: Any, **kwargs: Any) -> None:
+    def register_birth(self, *args, **kwargs):
         result = super(Worker, self).register_birth(*args, **kwargs)
-        names_list = [remove_queue_name_prefix(n) for n in self.queue_names()]
-        names = u', '.join(u'"{}"'.format(n) for n in names_list)
+        names = [remove_queue_name_prefix(n) for n in self.queue_names()]
+        names = u', '.join(u'"{}"'.format(n) for n in names)
         log.info(u'Worker {} (PID {}) has started on queue(s) {} '.format(
                  self.key, self.pid, names))
         return result
 
-    def execute_job(self, job: Job, *args: Any, **kwargs: Any) -> None:
+    def execute_job(self, job, *args, **kwargs):
         # We shut down all database connections and the engine to make sure
         # that they are not shared with the child process and closed there
         # while still being in use in the main process, see
@@ -284,16 +266,13 @@ class Worker(rq.Worker):
         # when they are used the next time.
         log.debug(u'Disposing database engine before fork')
         meta.Session.remove()
-        assert meta.engine
         meta.engine.dispose()
 
         # The original implementation performs the actual fork
         queue = remove_queue_name_prefix(job.origin)
 
-        if not job.meta:
-            job.meta = {}
-        if job.meta.get('title'):
-            job_id = '{} ({})'.format(job.id, job.meta['title'])
+        if job.meta.get(u'title'):
+            job_id = u'{} ({})'.format(job.id, job.meta['title'])
         else:
             job_id = job.id
 
@@ -307,23 +286,23 @@ class Worker(rq.Worker):
 
         return result
 
-    def register_death(self, *args: Any, **kwargs: Any) -> None:
+    def register_death(self, *args, **kwargs):
         result = super(Worker, self).register_death(*args, **kwargs)
         log.info(u'Worker {} (PID {}) has stopped'.format(self.key, self.pid))
         return result
 
-    def handle_exception(self, job: Job, *exc_info: Any) -> None:
+    def handle_exception(self, job, *exc_info):
         log.exception(u'Job {} on worker {} raised an exception: {}'.format(
                       job.id, self.key, exc_info[1]))
         return super(Worker, self).handle_exception(job, *exc_info)
 
-    def main_work_horse(self, job: Job, queue: rq.Queue):
+    def main_work_horse(self, job, queue):
         # This method is called in a worker's work horse process right
         # after forking.
         load_environment(config)
         return super(Worker, self).main_work_horse(job, queue)
 
-    def perform_job(self, *args: Any, **kwargs: Any) -> bool:
+    def perform_job(self, *args, **kwargs):
         result = super(Worker, self).perform_job(*args, **kwargs)
         # rq.Worker.main_work_horse does a hard exit via os._exit directly
         # after its call to perform_job returns. Hence here is the correct
@@ -333,7 +312,6 @@ class Worker(rq.Worker):
         except Exception:
             log.exception(u'Error while closing database session')
         try:
-            assert meta.engine
             meta.engine.dispose()
         except Exception:
             log.exception(u'Error while disposing database engine')

@@ -1,12 +1,9 @@
 # encoding: utf-8
 
-from ckan.types import AuthResult, Context, DataDict
 import ckan.plugins as p
 
 
-def datastore_auth(context: Context,
-                   data_dict: DataDict,
-                   privilege: str = 'resource_update') -> AuthResult:
+def datastore_auth(context, data_dict, privilege='resource_update'):
     if 'id' not in data_dict:
         data_dict['id'] = data_dict.get('resource_id')
 
@@ -25,7 +22,7 @@ def datastore_auth(context: Context,
         return {'success': True}
 
 
-def datastore_create(context: Context, data_dict: DataDict):
+def datastore_create(context, data_dict):
     if 'resource' in data_dict and data_dict['resource'].get('package_id'):
         data_dict['id'] = data_dict['resource'].get('package_id')
         privilege = 'package_update'
@@ -35,35 +32,31 @@ def datastore_create(context: Context, data_dict: DataDict):
     return datastore_auth(context, data_dict, privilege=privilege)
 
 
-def datastore_upsert(context: Context, data_dict: DataDict):
+def datastore_upsert(context, data_dict):
     return datastore_auth(context, data_dict)
 
 
-def datastore_delete(context: Context, data_dict: DataDict):
-    return datastore_auth(context, data_dict)
-
-
-def datastore_records_delete(context: Context, data_dict: DataDict):
+def datastore_delete(context, data_dict):
     return datastore_auth(context, data_dict)
 
 
 @p.toolkit.auth_allow_anonymous_access
-def datastore_info(context: Context, data_dict: DataDict):
+def datastore_info(context, data_dict):
     return datastore_auth(context, data_dict, 'resource_show')
 
 
 @p.toolkit.auth_allow_anonymous_access
-def datastore_search(context: Context, data_dict: DataDict):
+def datastore_search(context, data_dict):
     return datastore_auth(context, data_dict, 'resource_show')
 
 
 @p.toolkit.auth_allow_anonymous_access
-def datastore_search_sql(context: Context, data_dict: DataDict) -> AuthResult:
+def datastore_search_sql(context, data_dict):
     '''need access to view all tables in query'''
 
     for name in context['table_names']:
         name_auth = datastore_auth(
-            context.copy(),  # required because check_access mutates context
+            dict(context),  # required because check_access mutates context
             {'id': name},
             'resource_show')
         if not name_auth['success']:
@@ -73,27 +66,23 @@ def datastore_search_sql(context: Context, data_dict: DataDict) -> AuthResult:
     return {'success': True}
 
 
-def datastore_change_permissions(
-        context: Context, data_dict: DataDict) -> AuthResult:
+def datastore_change_permissions(context, data_dict):
     return datastore_auth(context, data_dict)
 
 
-def datastore_function_create(
-        context: Context, data_dict: DataDict) -> AuthResult:
+def datastore_function_create(context, data_dict):
     '''sysadmin-only: functions can be used to skip access checks'''
     return {'success': False}
 
 
-def datastore_function_delete(
-        context: Context, data_dict: DataDict) -> AuthResult:
+def datastore_function_delete(context, data_dict):
     return {'success': False}
 
 
-def datastore_run_triggers(
-        context: Context, data_dict: DataDict) -> AuthResult:
+def datastore_run_triggers(context, data_dict):
     '''sysadmin-only: functions can be used to skip access checks'''
     return {'success': False}
 
 
-def datastore_analyze(context: Context, data_dict: DataDict) -> AuthResult:
+def datastore_analyze(context, data_dict):
     return {'success': False}

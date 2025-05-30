@@ -1,43 +1,57 @@
 # encoding: utf-8
 
 import pytest
+import six
 from ckan.lib.helpers import url_for
 from bs4 import BeautifulSoup
 
 from ckan.tests import factories
 
 
+@pytest.mark.usefixtures("with_request_context")
 class TestHome(object):
     def test_home_renders(self, app):
         response = app.get(url_for("home.index"))
         assert "Welcome to CKAN" in response.body
 
-    @pytest.mark.usefixtures("non_clean_db")
+    def test_template_head_end(self, app):
+        # test-core.ini sets ckan.template_head_end to this:
+        test_link = (
+            '<link rel="stylesheet" '
+            'href="TEST_TEMPLATE_HEAD_END.css" type="text/css">'
+        )
+        response = app.get(url_for("home.index"))
+        assert test_link in response.body
+
+    def test_template_footer_end(self, app):
+        # test-core.ini sets ckan.template_footer_end to this:
+        test_html = "<strong>TEST TEMPLATE_FOOTER_END TEST</strong>"
+        response = app.get(url_for("home.index"))
+        assert test_html in response.body
+
+    @pytest.mark.usefixtures("clean_db")
     def test_email_address_nag(self, app):
         # before CKAN 1.6, users were allowed to have no email addresses
         # can't use factory to create user as without email it fails validation
         from ckan import model
 
-        user = model.User(name="has-no-email", password="correct123")
+        user = model.user.User(name="has-no-email")
         model.Session.add(user)
         model.Session.commit()
+        env = {"REMOTE_USER": six.ensure_str(user.name)}
 
-        user_token = factories.APIToken(user=user.id)
-        headers = {"Authorization": user_token["token"]}
-
-        response = app.get(url=url_for("home.index"), headers=headers)
+        response = app.get(url=url_for("home.index"), extra_environ=env)
 
         assert "update your profile" in response.body
         assert str(url_for("user.edit")) in response.body
         assert " and add your email address." in response.body
 
-    @pytest.mark.usefixtures("non_clean_db")
+    @pytest.mark.usefixtures("clean_db")
     def test_email_address_no_nag(self, app):
         user = factories.User(email="filled_in@nicely.com")
-        user_token = factories.APIToken(user=user["name"])
+        env = {"REMOTE_USER": six.ensure_str(user["name"])}
 
-        headers = {"Authorization": user_token["token"]}
-        response = app.get(url=url_for("home.index"), headers=headers)
+        response = app.get(url=url_for("home.index"), extra_environ=env)
 
         assert "add your email address" not in response
 
@@ -62,6 +76,7 @@ class TestHome(object):
         assert "Welcome to CKAN" in response.body
 
 
+@pytest.mark.usefixtures("with_request_context")
 class TestI18nURLs(object):
     def test_right_urls_are_rendered_on_language_selector(self, app):
 
@@ -114,18 +129,18 @@ class TestI18nURLs(object):
             legacy_locale = locale[0]
             new_locale = locale[1]
 
-            response = app.get(f'/{legacy_locale}/', follow_redirects=False)
+            response = app.get('/{}/'.format(legacy_locale), follow_redirects=False)
 
             assert response.status_code == 308
             assert (
                 response.headers['Location'] ==
-                f'http://test.ckan.net/{new_locale}'
+                'http://test.ckan.net/{}'.format(new_locale)
             )
 
-            response = app.get(f'/{legacy_locale}/dataset?some=param', follow_redirects=False)
+            response = app.get('/{}/dataset'.format(legacy_locale), follow_redirects=False)
 
             assert response.status_code == 308
             assert (
                 response.headers['Location'] ==
-                f'http://test.ckan.net/{new_locale}/dataset?some=param'
+                'http://test.ckan.net/{}/dataset'.format(new_locale)
             )

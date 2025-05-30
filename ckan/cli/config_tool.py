@@ -1,11 +1,11 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import logging
+
 import click
 
-import ckan.lib.config_tool as ct
 from ckan.cli import error_shout
+import ckan.lib.config_tool as ct
 
 log = logging.getLogger(__name__)
 
@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 class ConfigOption(click.ParamType):
     name = u'config-option'
 
-    def convert(self, value: str, param: str, ctx: click.Context):
+    def convert(self, value, param, ctx):
         if u'=' not in value:
             self.fail(
                 u'An option does not have an equals sign. '
@@ -47,10 +47,7 @@ class ConfigOption(click.ParamType):
 )
 @click.argument(u'config_filepath', type=click.Path(exists=True))
 @click.argument(u'options', nargs=-1, type=ConfigOption())
-def config_tool(
-        config_filepath: str,
-        options: list[str], section: str, edit: bool,
-        merge_filepath: str) -> None:
+def config_tool(config_filepath, options, section, edit, merge_filepath):
     u'''Tool for editing options in a CKAN config file
 
     ckan config-tool <default.ini> <key>=<value> [<key>=<value> ...]

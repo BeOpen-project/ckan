@@ -1,14 +1,12 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import polib
 import re
 import logging
 import os
 
-from typing import Any, cast
-
 import click
+import six
 
 from ckan.common import config
 from ckan.lib.i18n import build_js_translations
@@ -56,7 +54,7 @@ def mangle():
                      u'|\\%((\\d)*\\$)?' + spf_reg_ex + u')'
 
     for entry in po:
-        msg = entry.msgid
+        msg = entry.msgid.encode(u'utf-8')
         matches = re.finditer(extract_reg_ex, msg)
         length = len(msg)
         position = 0
@@ -84,7 +82,7 @@ def mangle():
     u'check-po', short_help=u'Check po files for common mistakes'
 )
 @click.argument(u'files', nargs=-1, type=click.Path(exists=True))
-def check_po(files: list[str]):
+def check_po(files):
     for file in files:
         errors = check_po_file(file)
         for msgid, msgstr in errors:
@@ -101,7 +99,7 @@ def check_po(files: list[str]):
     'with the ones on the pot file'
 )
 @click.argument(u'files', nargs=-1, type=click.Path(exists=True))
-def sync_po_msgids(files: list[str]):
+def sync_po_msgids(files):
     i18n_path = get_i18n_path()
     pot_path = os.path.join(i18n_path, u'ckan.pot')
     po = polib.pofile(pot_path)
@@ -113,11 +111,11 @@ def sync_po_msgids(files: list[str]):
         sync_po_file_msgids(entries_to_change, path)
 
 
-def normalize_string(s: str):
+def normalize_string(s):
     return re.sub(r'\s\s+', ' ', s).strip()
 
 
-def sync_po_file_msgids(entries_to_change: dict[str, Any], path: str):
+def sync_po_file_msgids(entries_to_change, path):
 
     po = polib.pofile(path)
     cnt = 0
@@ -136,12 +134,11 @@ def sync_po_file_msgids(entries_to_change: dict[str, Any], path: str):
     )
 
 
-def get_i18n_path() -> str:
-    return config.get(
-        u'ckan.i18n_directory') or os.path.join(ckan_path, u'i18n')
+def get_i18n_path():
+    return config.get(u'ckan.i18n_directory', os.path.join(ckan_path, u'i18n'))
 
 
-def simple_conv_specs(s: str):
+def simple_conv_specs(s):
     '''Return the simple Python string conversion specifiers in the string s.
 
     e.g. ['%s', '%i']
@@ -152,7 +149,7 @@ def simple_conv_specs(s: str):
     return simple_conv_specs_re.findall(s)
 
 
-def mapping_keys(s: str):
+def mapping_keys(s):
     '''Return a sorted list of the mapping keys in the string s.
 
     e.g. ['%(name)s', '%(age)i']
@@ -163,7 +160,7 @@ def mapping_keys(s: str):
     return sorted(mapping_keys_re.findall(s))
 
 
-def replacement_fields(s: str):
+def replacement_fields(s):
     '''Return a sorted list of the Python replacement fields in the string s.
 
     e.g. ['{}', '{2}', '{object}', '{target}']
@@ -174,31 +171,28 @@ def replacement_fields(s: str):
     return sorted(repl_fields_re.findall(s))
 
 
-def check_translation(validator: Any, msgid: str, msgstr: str):
+def check_translation(validator, msgid, msgstr):
     if not validator(msgid) == validator(msgstr):
         return msgid, msgstr
 
 
-def check_po_file(path: str):
-    errors: list[tuple[str, str]] = []
+def check_po_file(path):
+    errors = []
     po = polib.pofile(path)
     for entry in po.translated_entries():
         if entry.msgid_plural and entry.msgstr_plural:
             for function in (
                 simple_conv_specs, mapping_keys, replacement_fields
             ):
-                # typechecker thinks it's a list of strings
-                plurals = cast("dict[str, str]", entry.msgstr_plural)
-                for key in plurals.keys():
+                for key, msgstr in six.iteritems(entry.msgstr_plural):
                     if key == u'0':
                         error = check_translation(
-                            function, entry.msgid,
-                            plurals[key]
+                            function, entry.msgid, entry.msgstr_plural[key]
                         )
                     else:
                         error = check_translation(
                             function, entry.msgid_plural,
-                            plurals[key]
+                            entry.msgstr_plural[key]
                         )
                     if error:
                         errors.append(error)

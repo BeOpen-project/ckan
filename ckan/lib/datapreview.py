@@ -4,33 +4,32 @@
 
 Functions and data structures that are needed for the ckan data preview.
 """
-from __future__ import annotations
 
 import logging
-from typing import Any, Iterable, Optional
 
-from urllib.parse import urlparse
+from six.moves.urllib.parse import urlparse
+
+from ckan.common import config
 
 import ckan.plugins as p
 from ckan import logic
-from ckan.common import _, config
-from ckan.types import Context
+from ckan.common import _
 
 
 log = logging.getLogger(__name__)
 
 
-DEFAULT_RESOURCE_VIEW_TYPES = ['image_view', 'datatables_view']
+DEFAULT_RESOURCE_VIEW_TYPES = ['image_view', 'recline_view']
 
 
-def res_format(resource: dict[str, Any]) -> Optional[str]:
+def res_format(resource):
     ''' The assumed resource format in lower case. '''
     if not resource['url']:
         return None
     return (resource['format'] or resource['url'].split('.')[-1]).lower()
 
 
-def compare_domains(urls: Iterable[str]) -> bool:
+def compare_domains(urls):
     ''' Return True if the domains of the provided urls are the same.
     '''
     first_domain = None
@@ -54,15 +53,67 @@ def compare_domains(urls: Iterable[str]) -> bool:
     return True
 
 
-def on_same_domain(data_dict: dict[str, Any]) -> bool:
+def on_same_domain(data_dict):
     # compare CKAN domain and resource URL
-    ckan_url = config.get('ckan.site_url')
+    ckan_url = config.get('ckan.site_url', '//localhost:5000')
     resource_url = data_dict['resource']['url']
 
     return compare_domains([ckan_url, resource_url])
 
 
-def get_view_plugin(view_type: Optional[str]) -> Optional[p.IResourceView]:
+def get_preview_plugin(data_dict, return_first=False):
+    '''Determines whether there is an extension that can preview the resource.
+
+    :param data_dict: contains a resource and package dict.
+        The resource dict has to have a value for ``on_same_domain``
+    :type data_dict: dictionary
+
+    :param return_first: If True return the first plugin that can preview
+    :type return_first: bool
+
+    Returns a dict of plugins that can preview or ones that are fixable'''
+
+    data_dict['resource']['on_same_domain'] = on_same_domain(data_dict)
+
+    plugins_that_can_preview = []
+    plugins_fixable = []
+    for plugin in p.PluginImplementations(p.IResourcePreview):
+        p_info = {'plugin': plugin, 'quality': 1}
+        data = plugin.can_preview(data_dict)
+        # old school plugins return true/False
+        if isinstance(data, bool):
+            p_info['can_preview'] = data
+        else:
+            # new school provide a dict
+            p_info.update(data)
+        # if we can preview
+        if p_info['can_preview']:
+            if return_first:
+                plugin
+            plugins_that_can_preview.append(p_info)
+        elif p_info.get('fixable'):
+            plugins_fixable.append(p_info)
+
+    num_plugins = len(plugins_that_can_preview)
+    if num_plugins == 0:
+        # we didn't find any.  see if any could be made to work
+        for plug in plugins_fixable:
+            log.info('%s would allow previews.  To fix: %s' % (
+                plug['plugin'], plug['fixable']))
+        preview_plugin = None
+    elif num_plugins == 1:
+        # just one available
+        preview_plugin = plugins_that_can_preview[0]['plugin']
+    else:
+        # multiple plugins so get the best one
+        plugs = [pl['plugin'] for pl in plugins_that_can_preview]
+        log.warn('Multiple previews are possible. {0}'.format(plugs))
+        preview_plugin = max(plugins_that_can_preview,
+                             key=lambda x: x['quality'])['plugin']
+    return preview_plugin
+
+
+def get_view_plugin(view_type):
     '''
     Returns the IResourceView plugin associated with the given view_type.
     '''
@@ -71,10 +122,9 @@ def get_view_plugin(view_type: Optional[str]) -> Optional[p.IResourceView]:
         name = info.get('name')
         if name == view_type:
             return plugin
-    return None
 
 
-def get_view_plugins(view_types: Iterable[str]) -> list[p.IResourceView]:
+def get_view_plugins(view_types):
     '''
     Returns a list of the view plugins associated with the given view_types.
     '''
@@ -87,8 +137,7 @@ def get_view_plugins(view_types: Iterable[str]) -> list[p.IResourceView]:
     return view_plugins
 
 
-def get_allowed_view_plugins(
-        data_dict: dict[str, Any]) -> list[p.IResourceView]:
+def get_allowed_view_plugins(data_dict):
     '''
     Returns a list of view plugins that work against the resource provided
 
@@ -105,8 +154,7 @@ def get_allowed_view_plugins(
     return can_view
 
 
-def get_default_view_plugins(
-        get_datastore_views: bool = False) -> list[p.IResourceView]:
+def get_default_view_plugins(get_datastore_views=False):
     '''
     Returns the list of view plugins to be created by default on new resources
 
@@ -124,7 +172,11 @@ def get_default_view_plugins(
 
     Returns a list of IResourceView plugins
     '''
-    default_view_types = config.get('ckan.views.default_views')
+
+    if config.get('ckan.views.default_views') is None:
+        default_view_types = DEFAULT_RESOURCE_VIEW_TYPES
+    else:
+        default_view_types = config.get('ckan.views.default_views').split()
 
     default_view_plugins = []
     for view_type in default_view_types:
@@ -132,8 +184,8 @@ def get_default_view_plugins(
         view_plugin = get_view_plugin(view_type)
 
         if not view_plugin:
-            log.warning(
-                'Plugin for view {0} could not be found'.format(view_type))
+            log.warn('Plugin for view {0} could not be found'
+                     .format(view_type))
             # We should probably check on startup if the default
             # view types exist
             continue
@@ -148,12 +200,11 @@ def get_default_view_plugins(
     return default_view_plugins
 
 
-def add_views_to_resource(context: Context,
-                          resource_dict: dict[str, Any],
-                          dataset_dict: Optional[dict[str, Any]] = None,
-                          view_types: Optional[list[str]] = None,
-                          create_datastore_views: bool = False
-                          ) -> list[dict[str, Any]]:
+def add_views_to_resource(context,
+                          resource_dict,
+                          dataset_dict=None,
+                          view_types=[],
+                          create_datastore_views=False):
     '''
     Creates the provided views (if necessary) on the provided resource
 
@@ -189,7 +240,7 @@ def add_views_to_resource(context: Context,
     if not view_plugins:
         return []
 
-    existing_views = logic.get_action('resource_view_list')(
+    existing_views = p.toolkit.get_action('resource_view_list')(
         context, {'id': resource_dict['id']})
 
     existing_view_types = ([v['view_type'] for v in existing_views]
@@ -215,17 +266,17 @@ def add_views_to_resource(context: Context,
                     'title': view_info.get('default_title', _('View')),
                     'description': view_info.get('default_description', '')}
 
-            view_dict = logic.get_action('resource_view_create')(context, view)
+            view_dict = p.toolkit.get_action('resource_view_create')(context,
+                                                                     view)
             created_views.append(view_dict)
 
     return created_views
 
 
-def add_views_to_dataset_resources(
-        context: Context,
-        dataset_dict: dict[str, Any],
-        view_types: Optional[list[str]] = None,
-        create_datastore_views: bool = False) -> list[dict[str, Any]]:
+def add_views_to_dataset_resources(context,
+                                   dataset_dict,
+                                   view_types=[],
+                                   create_datastore_views=False):
     '''
     Creates the provided views on all resources of the provided dataset
 

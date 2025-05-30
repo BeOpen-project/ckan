@@ -35,26 +35,31 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 '''
-from __future__ import annotations
 
 import collections
 import json
 import logging
 import os
 import os.path
-from typing import Any, Optional
+from io import open
 
+import six
 from babel import Locale
 from babel.core import (LOCALE_ALIASES,
                         get_locale_identifier,
                         UnknownLocaleError)
+from babel.support import Translations
 import polib
 
+from ckan.common import config, is_flask_request, aslist
+import ckan.i18n
 from ckan.plugins import PluginImplementations
 from ckan.plugins.interfaces import ITranslation
-from ckan.types import Request
-from ckan.common import config
-from ckan.lib.io import get_ckan_temp_directory
+
+if six.PY2:
+    from pylons import i18n as pylons_i18n
+    import pylons
+
 
 log = logging.getLogger(__name__)
 
@@ -65,31 +70,26 @@ LOCALE_ALIASES['pt'] = 'pt_BR'
 # CKAN root directory
 _CKAN_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), u'..'))
 
+# Output directory for generated JavaScript translations
+_JS_TRANSLATIONS_DIR = os.path.join(_CKAN_DIR, u'public', u'base', u'i18n')
 
-def get_ckan_i18n_dir() -> str:
-    path = config.get(u'ckan.i18n_directory') or os.path.join(
-        _CKAN_DIR, u'i18n')
+
+def get_ckan_i18n_dir():
+    path = config.get(
+        u'ckan.i18n_directory') or os.path.join(_CKAN_DIR, u'i18n')
     if os.path.isdir(os.path.join(path, u'i18n')):
         path = os.path.join(path, u'i18n')
 
     return path
 
 
-def get_js_translations_dir() -> str:
-    storage_path = config["ckan.storage_path"] or get_ckan_temp_directory()
-
-    js_translations_path = os.path.join(storage_path, "i18n", "js")
-
-    return js_translations_path
-
-
-def get_locales_from_config() -> set[str]:
+def get_locales_from_config():
     ''' despite the name of this function it gets the locales defined by
     the config AND also the locals available subject to the config. '''
-    locales_offered = config.get('ckan.locales_offered')
-    filtered_out = config.get('ckan.locales_filtered_out')
-    locale_default = [config.get('ckan.locale_default')]
-    locale_order = config.get('ckan.locale_order')
+    locales_offered = config.get('ckan.locales_offered', '').split()
+    filtered_out = config.get('ckan.locales_filtered_out', '').split()
+    locale_default = [config.get('ckan.locale_default', 'en')]
+    locale_order = config.get('ckan.locale_order', '').split()
 
     known_locales = get_locales()
     all_locales = (set(known_locales) |
@@ -100,15 +100,15 @@ def get_locales_from_config() -> set[str]:
     return all_locales
 
 
-def _get_locales() -> list[str]:
+def _get_locales():
     # FIXME this wants cleaning up and merging with get_locales_from_config()
     assert not config.get('lang'), \
         ('"lang" config option not supported - please use ckan.locale_default '
          'instead.')
-    locales_offered = config.get('ckan.locales_offered')
-    filtered_out = config.get('ckan.locales_filtered_out')
-    locale_default = config.get('ckan.locale_default')
-    locale_order = config.get('ckan.locale_order')
+    locales_offered = config.get('ckan.locales_offered', '').split()
+    filtered_out = config.get('ckan.locales_filtered_out', '').split()
+    locale_default = config.get('ckan.locale_default', 'en')
+    locale_order = config.get('ckan.locale_order', '').split()
 
     locales = ['en']
     i18n_path = get_ckan_i18n_dir()
@@ -155,13 +155,13 @@ def _get_locales() -> list[str]:
     return ordered_list
 
 
-available_locales: Optional[list[Locale]] = None
-locales: Optional[list[str]] = None
-locales_dict: Optional[dict[str, Optional[Locale]]] = None
-_non_translated_locals: Optional[list[str]] = None
+available_locales = None
+locales = None
+locales_dict = None
+_non_translated_locals = None
 
 
-def get_locales() -> list[str]:
+def get_locales():
     ''' Get list of available locales
     e.g. [ 'en', 'de', ... ]
     '''
@@ -171,17 +171,17 @@ def get_locales() -> list[str]:
     return locales
 
 
-def non_translated_locals() -> list[str]:
+def non_translated_locals():
     ''' These are the locales that are available but for which there are
     no translations. returns a list like ['en', 'de', ...] '''
     global _non_translated_locals
     if not _non_translated_locals:
-        locales = config.get('ckan.locale_order')
+        locales = config.get('ckan.locale_order', '').split()
         _non_translated_locals = [x for x in locales if x not in get_locales()]
     return _non_translated_locals
 
 
-def get_locales_dict() -> dict[str, Optional[Locale]]:
+def get_locales_dict():
     ''' Get a dict of the available locales
     e.g.  { 'en' : Locale('en'), 'de' : Locale('de'), ... } '''
     global locales_dict
@@ -193,7 +193,7 @@ def get_locales_dict() -> dict[str, Optional[Locale]]:
     return locales_dict
 
 
-def get_available_locales() -> list[Locale]:
+def get_available_locales():
     ''' Get a list of the available locales
     e.g.  [ Locale('en'), Locale('de'), ... ] '''
     global available_locales
@@ -206,21 +206,17 @@ def get_available_locales() -> list[Locale]:
             # so e.g. `zn_CH` instead of `zn_Hans_CH` this is needed
             # to properly construct urls with url_for
             parsed_locale = Locale.parse(locale)
-            assert parsed_locale
-            parsed_locale.short_name = locale  # type: ignore
+            parsed_locale.short_name = locale
 
             # Add the full identifier (eg `pt_BR`) to the locale classes,
             # as it does not offer a way of accessing it directly
-            identifier = get_identifier_from_locale_class(
-                parsed_locale
-            )
-
-            parsed_locale.identifier = identifier  # type: ignore
+            parsed_locale.identifier = \
+                get_identifier_from_locale_class(parsed_locale)
             available_locales.append(parsed_locale)
     return available_locales
 
 
-def get_identifier_from_locale_class(locale: Locale) -> str:
+def get_identifier_from_locale_class(locale):
     return get_locale_identifier(
         (locale.language,
          locale.territory,
@@ -228,31 +224,81 @@ def get_identifier_from_locale_class(locale: Locale) -> str:
          locale.variant))
 
 
-def handle_request(request: Request, tmpl_context: Any) -> str:
+def _set_lang(lang):
+    ''' Allows a custom i18n directory to be specified.
+    Creates a fake config file to pass to pylons.i18n.set_lang, which
+    sets the Pylons root path to desired i18n_directory.
+    This is needed as Pylons will only look for an i18n directory in
+    the application root.'''
+    i18n_dir = get_ckan_i18n_dir()
+    if i18n_dir:
+        fake_config = {'pylons.paths': {
+            'root': os.path.dirname(i18n_dir.rstrip('/'))
+        }, 'pylons.package': config['pylons.package']}
+        pylons_i18n.set_lang(
+            lang, pylons_config=fake_config, class_=Translations)
+    else:
+        pylons_i18n.set_lang(lang, class_=Translations)
+
+
+def handle_request(request, tmpl_context):
     ''' Set the language for the request '''
     lang = request.environ.get('CKAN_LANG') or \
-        config.get('ckan.locale_default')
+        config.get('ckan.locale_default', 'en')
     if lang != 'en':
         set_lang(lang)
+
+    for plugin in PluginImplementations(ITranslation):
+        if lang in plugin.i18n_locales():
+            _add_extra_translations(plugin.i18n_directory(), lang,
+                                    plugin.i18n_domain())
+
+    extra_directory = config.get('ckan.i18n.extra_directory')
+    extra_domain = config.get('ckan.i18n.extra_gettext_domain')
+    extra_locales = aslist(config.get('ckan.i18n.extra_locales'))
+    if extra_directory and extra_domain and extra_locales:
+        if lang in extra_locales:
+            _add_extra_translations(extra_directory, lang, extra_domain)
 
     tmpl_context.language = lang
     return lang
 
 
-def get_lang() -> str:
+def _add_extra_translations(dirname, locales, domain):
+    translator = Translations.load(dirname=dirname, locales=locales,
+                                   domain=domain)
+    try:
+        pylons.translator.merge(translator)
+    except AttributeError:
+        # this occurs when an extension has 'en' translations that
+        # replace the default strings. As set_lang has not been run,
+        # pylons.translation is the NullTranslation, so we have to
+        # replace the StackedObjectProxy ourselves manually.
+        environ = pylons.request.environ
+        environ['pylons.pylons'].translator = translator
+        if 'paste.registry' in environ:
+            environ['paste.registry'].replace(pylons.translator,
+                                              translator)
+
+
+def get_lang():
     ''' Returns the current language. Based on babel.i18n.get_lang but
     works when set_lang has not been run (i.e. still in English). '''
-    from ckan.config.middleware.flask_app import get_locale
-    return get_locale()
+    if is_flask_request():
+        from ckan.config.middleware.flask_app import get_locale
+        return get_locale()
+    return 'en'
 
 
-def set_lang(language_code: str) -> None:
+def set_lang(language_code):
     ''' Wrapper to pylons call '''
     if language_code in non_translated_locals():
-        language_code = config.get('ckan.locale_default')
+        language_code = config.get('ckan.locale_default', 'en')
+    if language_code != 'en':
+        _set_lang(language_code)
 
 
-def _get_js_translation_entries(filename: str) -> set[str]:
+def _get_js_translation_entries(filename):
     '''
     Extract IDs of PO entries that are used in JavaScript files.
 
@@ -271,9 +317,7 @@ def _get_js_translation_entries(filename: str) -> set[str]:
     return js_entries
 
 
-def _build_js_translation(
-        lang: str, source_filenames: list[str],
-        entries: set[Any], dest_filename: str):
+def _build_js_translation(lang, source_filenames, entries, dest_filename):
     '''
     Build JavaScript translations for a single language.
 
@@ -305,24 +349,15 @@ def _build_js_translation(
                 result[entry.msgid] = [None, entry.msgstr]
             elif entry.msgstr_plural:
                 plural = result[entry.msgid] = [entry.msgid_plural]
-                ordered_plural = sorted(
-                    entry.msgstr_plural.items())  # type: ignore
-                for _, msgstr in ordered_plural:
+                ordered_plural = sorted(entry.msgstr_plural.items())
+                for order, msgstr in ordered_plural:
                     plural.append(msgstr)
     with open(dest_filename, u'w', encoding='utf-8') as f:
-        s = json.dumps(
-            result, sort_keys=True, ensure_ascii=False, separators=(',', ':')
-        )
+        s = json.dumps(result, sort_keys=True, indent=2, ensure_ascii=False)
         f.write(s)
 
 
-def _check_js_translations_dest_dir() -> None:
-    dest_dir = get_js_translations_dir()
-    if not os.path.isdir(dest_dir):
-        os.makedirs(dest_dir)
-
-
-def build_js_translations() -> None:
+def build_js_translations():
     '''
     Build JavaScript translation files.
 
@@ -333,14 +368,10 @@ def build_js_translations() -> None:
     '''
     log.debug(u'Generating JavaScript translations')
     ckan_i18n_dir = get_ckan_i18n_dir()
-    dest_dir = get_js_translations_dir()
-    _check_js_translations_dest_dir()
-
     # Collect all language codes (an extension might add support for a
     # language that isn't supported by CKAN core, yet).
     langs = set()
-    i18n_dirs: dict[str, str] = collections.OrderedDict([
-        (ckan_i18n_dir, u'ckan')])
+    i18n_dirs = collections.OrderedDict([(ckan_i18n_dir, u'ckan')])
     for item in os.listdir(ckan_i18n_dir):
         if os.path.isdir(os.path.join(ckan_i18n_dir, item)):
             langs.add(item)
@@ -352,7 +383,7 @@ def build_js_translations() -> None:
     # the POT files for that, since they contain all translation entries
     # (even those for which no translation exists, yet).
     js_entries = set()
-    for i18n_dir, domain in i18n_dirs.items():
+    for i18n_dir, domain in six.iteritems(i18n_dirs):
         pot_file = os.path.join(i18n_dir, domain + u'.pot')
         if os.path.isfile(pot_file):
             js_entries.update(_get_js_translation_entries(pot_file))
@@ -367,18 +398,16 @@ def build_js_translations() -> None:
                     u'LC_MESSAGES',
                     domain + u'.po'
                 )
-                for i18n_dir, domain in i18n_dirs.items()
+                for i18n_dir, domain in six.iteritems(i18n_dirs)
             ) if os.path.isfile(fn)
         ]
         if not po_files:
             continue
 
         latest = max(os.path.getmtime(fn) for fn in po_files)
-        dest_file = os.path.join(dest_dir, lang + u'.js')
-
-        if (not os.path.isfile(dest_file) or
-                os.path.getmtime(dest_file) < latest):
-            log.debug('Generating JS translation for "{}"'.format(lang))
+        dest_file = os.path.join(_JS_TRANSLATIONS_DIR, lang + u'.js')
+        if os.path.isfile(dest_file) and os.path.getmtime(dest_file) > latest:
+            log.debug(u'JS translation for "{}" is up to date'.format(lang))
+        else:
+            log.debug(u'Generating JS translation for "{}"'.format(lang))
             _build_js_translation(lang, po_files, js_entries, dest_file)
-
-    log.debug('All JS translation are up to date')

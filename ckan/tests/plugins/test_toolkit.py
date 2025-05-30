@@ -2,7 +2,7 @@
 
 import pytest
 
-import ckan.plugins.toolkit as tk
+from ckan.plugins import toolkit as tk
 
 
 @pytest.mark.parametrize(
@@ -63,12 +63,6 @@ import ckan.plugins.toolkit as tk
         ("1.5.1", "max", "1.6.1", True),
         ("1.5.1", "max", "1.5.0", False),
         ("1.5.1", "max", "1.5.2", True),
-        ("2.10.0a0", "min", "2.10.2", False),
-        ("2.10.0", "min", "2.10.0a1", True),
-        ("2.10.1b0", "min", "2.10.2", False),
-        ("2.10.1b0", "max", "2.10.1", True),
-        ("2.10.0a0", "max", "2.10.2", True),
-        ("2.10.0", "max", "2.10.0a1", False),
     ],
 )
 def test_check_ckan_version(version, bound, value, expected, monkeypatch):
@@ -95,7 +89,7 @@ def test_raise(monkeypatch):
 
 def test_call_helper():
     # the null_function would return ''
-    assert tk.h.ckan_version()
+    assert tk.h.icon_url(u"x")
 
 
 def test_tk_helper_attribute_error_on_missing_helper():
@@ -113,14 +107,3 @@ def test_tk_helper_as_item_missing_helper():
     """Directly attempt access as item"""
     with pytest.raises(tk.HelperError):
         tk.h[u"nothere"]()
-
-
-def test_get_endpoint_without_context():
-    """Do not fail in CLI and tests."""
-    assert tk.get_endpoint() == (None, None)
-
-
-@pytest.mark.usefixtures("with_request_context")
-def test_get_endpoint_with_context():
-    """with_request_context fixture mocks request to the homepage."""
-    assert tk.get_endpoint() == ("home", "index")

@@ -1,10 +1,7 @@
 # encoding: utf-8
 
-from __future__ import annotations
-
-from typing import Any
-from ckan.types import Validator
-
+import six
+from six import text_type
 
 from ckan.plugins.toolkit import Invalid
 from ckan import plugins
@@ -13,7 +10,7 @@ from ckan import plugins
 class ExampleIValidatorsPlugin(plugins.SingletonPlugin):
     plugins.implements(plugins.IValidators)
 
-    def get_validators(self) -> dict[str, Validator]:
+    def get_validators(self):
         return {
             u'equals_fortytwo': equals_fortytwo,
             u'negate': negate,
@@ -21,20 +18,20 @@ class ExampleIValidatorsPlugin(plugins.SingletonPlugin):
         }
 
 
-def equals_fortytwo(value: Any):
+def equals_fortytwo(value):
     if value != 42:
         raise Invalid(u'not 42')
     return value
 
 
-def negate(value: Any):
+def negate(value):
     return -value
 
 
-def unicode_please(value: Any):
-    if isinstance(value, bytes):
+def unicode_please(value):
+    if isinstance(value, six.binary_type):
         try:
-            return str(value)
+            return six.ensure_text(value)
         except UnicodeDecodeError:
             return value.decode(u'cp1252')
-    return str(value)
+    return text_type(value)

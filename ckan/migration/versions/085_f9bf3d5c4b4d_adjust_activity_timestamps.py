@@ -8,7 +8,7 @@ Create Date: 2018-09-04 18:49:18.307804
 """
 import datetime
 from alembic import op
-from sqlalchemy import text
+import sqlalchemy as sa
 from ckan.migration import skip_based_on_legacy_engine_version
 # revision identifiers, used by Alembic.
 revision = 'f9bf3d5c4b4d'
@@ -29,8 +29,8 @@ def upgrade():
         return
 
     connection = op.get_bind()
-    sql = text("update activity set timestamp = timestamp + (:utc - :local);")
-    connection.execute(sql, {"utc": utc_date, "local": local_date})
+    sql = u"update activity set timestamp = timestamp + (%s - %s);"
+    connection.execute(sql, utc_date, local_date)
 
 
 def downgrade():
@@ -43,5 +43,5 @@ def downgrade():
         return
 
     connection = op.get_bind()
-    sql = text("update activity set timestamp = timestamp - (:utc - :local);")
-    connection.execute(sql, {"utc": utc_date, "local": local_date})
+    sql = u"update activity set timestamp = timestamp - (%s - %s);"
+    connection.execute(sql, utc_date, local_date)

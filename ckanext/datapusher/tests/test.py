@@ -5,41 +5,61 @@ import datetime
 import json
 import pytest
 import responses
+import sqlalchemy.orm as orm
 
 import ckan.lib.create_test_data as ctd
 import ckan.model as model
 import ckan.plugins as p
+import ckan.tests.legacy as tests
 from ckan.tests import factories
-from ckan.tests.helpers import call_action
+import ckanext.datastore.backend.postgres as db
 from ckan.common import config
 from ckanext.datastore.tests.helpers import set_url_type
-from ckanext.datapusher.tests import get_api_token
 
 
-@pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
-@pytest.mark.ckan_config("ckan.datapusher.api_token", get_api_token())
-@pytest.mark.usefixtures("with_plugins", "non_clean_db")
-class TestDatastoreNew:
-    def test_create_ckan_resource_in_package(self, app, api_token):
-        package = factories.Dataset.model()
+class TestDatastoreCreate(object):
+    sysadmin_user = None
+    normal_user = None
+
+    @pytest.fixture(autouse=True)
+    def initial_data(self, clean_db, clean_index, test_request_context):
+        if not tests.is_datastore_supported():
+            pytest.skip("Datastore not supported")
+        ctd.CreateTestData.create()
+        self.sysadmin_user = model.User.get("testsysadmin")
+        self.normal_user = model.User.get("annafan")
+        engine = db.get_write_engine()
+        self.Session = orm.scoped_session(orm.sessionmaker(bind=engine))
+        with test_request_context():
+            set_url_type(
+                model.Package.get("annakarenina").resources, self.sysadmin_user
+            )
+
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
+    def test_create_ckan_resource_in_package(self, app):
+        package = model.Package.get("annakarenina")
         data = {"resource": {"package_id": package.id}}
-        headers = {"Authorization": api_token["token"]}
+        auth = {"Authorization": str(self.sysadmin_user.apikey)}
         res = app.post(
             "/api/action/datastore_create",
             json=data,
-            headers=headers,
+            extra_environ=auth,
             status=200,
         )
         res_dict = json.loads(res.body)
 
         assert "resource_id" in res_dict["result"]
-        assert len(package.resources) == 1
+        assert len(model.Package.get("annakarenina").resources) == 3
 
-        res = call_action("resource_show",
-                          id=res_dict["result"]["resource_id"])
+        res = tests.call_action_api(
+            app, "resource_show", id=res_dict["result"]["resource_id"]
+        )
         assert res["url"].endswith("/datastore/dump/" + res["id"]), res
 
     @responses.activate
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_providing_res_with_url_calls_datapusher_correctly(self, app):
         config["datapusher.url"] = "http://datapusher.ckan.org"
         responses.add(
@@ -50,41 +70,26 @@ class TestDatastoreNew:
         )
         responses.add_passthru(config["solr_url"])
 
-        package = factories.Dataset.model()
+        package = model.Package.get("annakarenina")
 
-        call_action("datastore_create",
-                    resource=dict(package_id=package.id, url="demo.ckan.org"))
+        tests.call_action_api(
+            app,
+            "datastore_create",
+            apikey=self.sysadmin_user.apikey,
+            resource=dict(package_id=package.id, url="demo.ckan.org"),
+        )
 
-        assert len(package.resources) == 1
-        resource = package.resources[0]
+        assert len(package.resources) == 3, len(package.resources)
+        resource = package.resources[2]
         data = json.loads(responses.calls[-1].request.body)
         assert data["metadata"]["resource_id"] == resource.id, data
         assert not data["metadata"].get("ignore_hash"), data
         assert data["result_url"].endswith("/action/datapusher_hook"), data
         assert data["result_url"].startswith("http://"), data
 
-
-@pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
-@pytest.mark.ckan_config("ckan.datapusher.api_token", get_api_token())
-@pytest.mark.usefixtures("with_plugins")
-class TestDatastoreCreate(object):
-    sysadmin_user = None
-    normal_user = None
-
-    @pytest.fixture(autouse=True)
-    def initial_data(self, clean_db):
-        ctd.CreateTestData.create()
-        self.sysadmin_user = factories.Sysadmin()
-        self.sysadmin_token = factories.APIToken(
-            user=self.sysadmin_user["id"])["token"]
-        self.normal_user = factories.User()
-        self.normal_user_token = factories.APIToken(
-            user=self.normal_user["id"])["token"]
-        set_url_type(
-            model.Package.get("annakarenina").resources, self.sysadmin_user
-        )
-
     @responses.activate
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_pass_the_received_ignore_hash_param_to_the_datapusher(self, app):
         config["datapusher.url"] = "http://datapusher.ckan.org"
         responses.add(
@@ -97,8 +102,10 @@ class TestDatastoreCreate(object):
         package = model.Package.get("annakarenina")
         resource = package.resources[0]
 
-        call_action(
+        tests.call_action_api(
+            app,
             "datapusher_submit",
+            apikey=self.sysadmin_user.apikey,
             resource_id=resource.id,
             ignore_hash=True,
         )
@@ -106,6 +113,8 @@ class TestDatastoreCreate(object):
         data = json.loads(responses.calls[-1].request.body)
         assert data["metadata"]["ignore_hash"], data
 
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_cant_provide_resource_and_resource_id(self, app):
         package = model.Package.get("annakarenina")
         resource = package.resources[0]
@@ -114,11 +123,11 @@ class TestDatastoreCreate(object):
             "resource": {"package_id": package.id},
         }
 
-        headers = {"Authorization": self.sysadmin_token}
+        auth = {"Authorization": str(self.sysadmin_user.apikey)}
         res = app.post(
             "/api/action/datastore_create",
             json=data,
-            headers=headers,
+            extra_environ=auth,
             status=409,
         )
         res_dict = json.loads(res.body)
@@ -126,6 +135,8 @@ class TestDatastoreCreate(object):
         assert res_dict["error"]["__type"] == "Validation Error"
 
     @responses.activate
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_send_datapusher_creates_task(self, test_request_context):
         responses.add(
             responses.POST,
@@ -137,7 +148,7 @@ class TestDatastoreCreate(object):
         package = model.Package.get("annakarenina")
         resource = package.resources[0]
 
-        context = {"ignore_auth": True, "user": self.sysadmin_user["name"]}
+        context = {"ignore_auth": True, "user": self.sysadmin_user.name}
         with test_request_context():
             p.toolkit.get_action("datapusher_submit")(
                 context, {"resource_id": resource.id}
@@ -160,7 +171,7 @@ class TestDatastoreCreate(object):
         package = model.Package.get("annakarenina")
         resource = package.resources[0]
 
-        context = {"user": self.sysadmin_user["name"]}
+        context = {"user": self.sysadmin_user.name}
 
         p.toolkit.get_action("task_status_update")(
             context,
@@ -177,21 +188,19 @@ class TestDatastoreCreate(object):
 
         data = {"status": "success", "metadata": {"resource_id": resource.id}}
 
-        if user["sysadmin"]:
-            headers = {"Authorization": self.sysadmin_token}
-        else:
-            headers = {"Authorization": self.normal_user_token}
+        auth = {"Authorization": str(user.apikey)}
         res = app.post(
             "/api/action/datapusher_hook",
             json=data,
-            headers=headers,
+            extra_environ=auth,
             status=200,
         )
         res_dict = json.loads(res.body)
 
         assert res_dict["success"] is True
 
-        task = call_action(
+        task = tests.call_action_api(
+            app,
             "task_status_show",
             entity_id=resource.id,
             task_type="datapusher",
@@ -200,7 +209,8 @@ class TestDatastoreCreate(object):
 
         assert task["state"] == "success", task
 
-        task = call_action(
+        task = tests.call_action_api(
+            app,
             "task_status_show",
             entity_id=resource.id,
             task_type="datapusher",
@@ -209,24 +219,34 @@ class TestDatastoreCreate(object):
 
         assert task["state"] == "success", task
 
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_datapusher_hook_sysadmin(self, app, test_request_context):
         with test_request_context():
             self._call_datapusher_hook(self.sysadmin_user, app)
 
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_datapusher_hook_normal_user(self, app, test_request_context):
         with test_request_context():
             self._call_datapusher_hook(self.normal_user, app)
 
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_datapusher_hook_no_metadata(self, app):
         data = {"status": "success"}
 
         app.post("/api/action/datapusher_hook", json=data, status=409)
 
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_datapusher_hook_no_status(self, app):
         data = {"metadata": {"resource_id": "res_id"}}
 
         app.post("/api/action/datapusher_hook", json=data, status=409)
 
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_datapusher_hook_no_resource_id_in_metadata(self, app):
         data = {"status": "success", "metadata": {}}
 
@@ -239,6 +259,8 @@ class TestDatastoreCreate(object):
     @pytest.mark.ckan_config(
         "ckan.datapusher.url", "http://datapusher.ckan.org"
     )
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_custom_callback_url_base(self, app):
 
         package = model.Package.get("annakarenina")
@@ -252,8 +274,10 @@ class TestDatastoreCreate(object):
         )
         responses.add_passthru(config["solr_url"])
 
-        call_action(
+        tests.call_action_api(
+            app,
             "datapusher_submit",
+            apikey=self.sysadmin_user.apikey,
             resource_id=resource.id,
             ignore_hash=True,
         )
@@ -271,6 +295,8 @@ class TestDatastoreCreate(object):
     @pytest.mark.ckan_config(
         "ckan.datapusher.url", "http://datapusher.ckan.org"
     )
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_create_resource_hooks(self, app):
 
         responses.add(
@@ -282,8 +308,10 @@ class TestDatastoreCreate(object):
         responses.add_passthru(config["solr_url"])
 
         dataset = factories.Dataset()
-        call_action(
+        resource = tests.call_action_api(
+            app,
             "resource_create",
+            apikey=self.sysadmin_user.apikey,
             package_id=dataset['id'],
             format='CSV',
         )
@@ -295,6 +323,8 @@ class TestDatastoreCreate(object):
     @pytest.mark.ckan_config(
         "ckan.datapusher.url", "http://datapusher.ckan.org"
     )
+    @pytest.mark.ckan_config("ckan.plugins", "datastore datapusher")
+    @pytest.mark.usefixtures("with_plugins")
     def test_update_resource_url_hooks(self, app):
 
         responses.add(
@@ -306,15 +336,19 @@ class TestDatastoreCreate(object):
         responses.add_passthru(config["solr_url"])
 
         dataset = factories.Dataset()
-        resource = call_action(
+        resource = tests.call_action_api(
+            app,
             "resource_create",
+            apikey=self.sysadmin_user.apikey,
             package_id=dataset['id'],
             url='http://example.com/old.csv',
             format='CSV',
         )
 
-        resource = call_action(
+        resource = tests.call_action_api(
+            app,
             "resource_update",
+            apikey=self.sysadmin_user.apikey,
             id=resource['id'],
             url='http://example.com/new.csv',
             format='CSV',

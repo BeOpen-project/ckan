@@ -1,26 +1,22 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import copy
 import datetime
 from secrets import token_urlsafe
-from typing import Any, Optional
 
 from sqlalchemy import types, Column, Table, ForeignKey, orm
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.mutable import MutableDict
-from typing_extensions import Self
 
+import ckan.plugins.toolkit as tk
 from ckan.model import meta, User, DomainObject
-from ckan.common import config
+
 
 __all__ = [u"ApiToken", u"api_token_table"]
 
-Mapped = orm.Mapped
 
-
-def _make_token() -> str:
-    nbytes = config.get(u"api_token.nbytes")
+def _make_token():
+    nbytes = tk.asint(tk.config.get(u"api_token.nbytes", 32))
     return token_urlsafe(nbytes)
 
 
@@ -37,30 +33,20 @@ api_token_table = Table(
 
 
 class ApiToken(DomainObject):
-    id: Mapped[str]
-    name: Mapped[str]
-    user_id: Mapped[Optional[str]]
-    created_at: Mapped[datetime.datetime]
-    last_access: Mapped[Optional[datetime.datetime]]
-    plugin_extras: Mapped[dict[str, Any]]
-    owner: Mapped[Optional[User]]
-
-    def __init__(
-            self, user_id: Optional[str] = None,
-            name: str = 'Unnamed') -> None:
+    def __init__(self, user_id=None, name=None):
         self.id = _make_token()
         self.user_id = user_id
         self.name = name
 
     @classmethod
-    def get(cls, id: Optional[str]) -> Optional[Self]:
+    def get(cls, id):
         if not id:
             return None
 
         return meta.Session.query(cls).get(id)
 
     @classmethod
-    def revoke(cls, id: Optional[str]) -> bool:
+    def revoke(cls, id):
         token = cls.get(id)
         if token:
             meta.Session.delete(token)
@@ -68,12 +54,12 @@ class ApiToken(DomainObject):
             return True
         return False
 
-    def touch(self, commit: bool = False) -> None:
+    def touch(self, commit=False):
         self.last_access = datetime.datetime.utcnow()
         if commit:
             meta.Session.commit()
 
-    def set_extra(self, key: str, value: Any, commit: bool = False) -> None:
+    def set_extra(self, key, value, commit=False):
         extras = self.plugin_extras or {}
         extras[key] = value
         self.plugin_extras = copy.deepcopy(extras)
@@ -81,13 +67,12 @@ class ApiToken(DomainObject):
             meta.Session.commit()
 
 
-meta.registry.map_imperatively(
+meta.mapper(
     ApiToken,
     api_token_table,
     properties={
-        u"owner": orm.relationship(
-            User, backref=orm.backref(u"api_tokens",
-                                      cascade=u"all, delete")
+        u"owner": orm.relation(
+            User, backref=orm.backref(u"api_tokens", cascade=u"all, delete")
         )
     },
 )

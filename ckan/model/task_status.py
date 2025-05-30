@@ -1,14 +1,11 @@
 # encoding: utf-8
 
 from datetime import datetime
-from typing import Optional
 from sqlalchemy import types, Column, Table, UniqueConstraint
-from sqlalchemy.orm import Mapped
-from typing_extensions import Self
 
-import ckan.model.meta as meta
-import ckan.model.types as _types
-import ckan.model.domain_object as domain_object
+from ckan.model import meta
+from ckan.model import types as _types
+from ckan.model import domain_object
 
 __all__ = ['TaskStatus', 'task_status_table']
 
@@ -26,18 +23,8 @@ task_status_table = Table('task_status', meta.metadata,
 )
 
 class TaskStatus(domain_object.DomainObject):
-    id: Mapped[str]
-    entity_id: Mapped[str]
-    entuty_type: Mapped[str]
-    task_type: Mapped[str]
-    key: Mapped[str]
-    value: Mapped[str]
-    state: Mapped[str]
-    error: Mapped[str]
-    last_updated: Mapped[datetime]
-
     @classmethod
-    def get(cls, reference: str) -> Optional[Self]:
+    def get(cls, reference):
         '''Returns a task status object referenced by its id.'''
         if not reference:
             return None
@@ -45,4 +32,4 @@ class TaskStatus(domain_object.DomainObject):
         task = meta.Session.query(cls).get(reference)
         return task
 
-meta.registry.map_imperatively(TaskStatus, task_status_table)
+meta.mapper(TaskStatus, task_status_table)

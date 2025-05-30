@@ -1,25 +1,28 @@
 # encoding: utf-8
-from __future__ import annotations
 
-from typing import Any
+import six
+from six import string_types
 
 import ckan
-import ckan.lib.navl.dictization_functions
-import ckan.model
+from ckan.plugins import SingletonPlugin, implements, IPackageController
+from ckan.plugins import IGroupController, IOrganizationController, ITagController, IResourceController
 
-import ckan.plugins as plugins
-
-from ckan.common import request, config, g
+from ckan.common import request, config, c
 from ckan.logic import get_action
 
+try:
+    long        # Python 2
+except NameError:
+    long = int  # Python 3
 
-def translate_data_dict(data_dict: dict[str, Any]):
+
+def translate_data_dict(data_dict):
     '''Return the given dict (e.g. a dataset dict) with as many of its fields
     as possible translated into the desired or the fallback language.
 
     '''
     desired_lang_code = request.environ['CKAN_LANG']
-    fallback_lang_code = config.get('ckan.locale_default')
+    fallback_lang_code = config.get('ckan.locale_default', 'en')
 
     # Get a flattened copy of data_dict to do the translation on.
     flattened = ckan.lib.navl.dictization_functions.flatten_dict(
@@ -31,9 +34,9 @@ def translate_data_dict(data_dict: dict[str, Any]):
     for (key, value) in flattened.items():
         if value in (None, True, False):
             continue
-        elif isinstance(value, str):
+        elif isinstance(value, string_types):
             terms.add(value)
-        elif isinstance(value, int):
+        elif isinstance(value, (int, long)):
             continue
         else:
             for item in value:
@@ -47,7 +50,7 @@ def translate_data_dict(data_dict: dict[str, Any]):
 
     # Get the translations of all the terms (as a list of dictionaries).
     translations = get_action('term_translation_show')(
-            {},
+            {'model': ckan.model},
             {'terms': terms,
                 'lang_codes': (desired_lang_code, fallback_lang_code)})
 
@@ -79,16 +82,15 @@ def translate_data_dict(data_dict: dict[str, Any]):
             # Don't try to translate values that aren't strings.
             translated_flattened[key] = value
 
-        elif isinstance(value, str):
+        elif isinstance(value, string_types):
             if value in desired_translations:
                 translated_flattened[key] = desired_translations[value]
             else:
                 translated_flattened[key] = fallback_translations.get(
                         value, value)
 
-        elif isinstance(value, (int, dict)):
+        elif isinstance(value, (int, long, dict)):
             if key == (u'organization',):
-                assert isinstance(value, dict)
                 translated_flattened[key] = translate_data_dict(value);
             else:
                 translated_flattened[key] = value
@@ -109,14 +111,14 @@ def translate_data_dict(data_dict: dict[str, Any]):
             .unflatten(translated_flattened))
     return translated_data_dict
 
-def translate_resource_data_dict(data_dict: dict[str, Any]):
+def translate_resource_data_dict(data_dict):
     '''Return the given dict with as many of its fields
     as possible translated into the desired or the fallback language.
 
     '''
 
     desired_lang_code = request.environ['CKAN_LANG']
-    fallback_lang_code = config.get('ckan.locale_default')
+    fallback_lang_code = config.get('ckan.locale_default', 'en')
 
     # Get a flattened copy of data_dict to do the translation on.
     flattened = ckan.lib.navl.dictization_functions.flatten_dict(
@@ -128,17 +130,17 @@ def translate_resource_data_dict(data_dict: dict[str, Any]):
     for (key, value) in flattened.items():
         if value in (None, True, False):
             continue
-        elif isinstance(value, str):
+        elif isinstance(value, string_types):
             terms.add(value)
-        elif isinstance(value, int):
+        elif isinstance(value, (int, long)):
             continue
         else:
             for item in value:
                  terms.add(item)
 
     # Get the translations of all the terms (as a list of dictionaries).
-    translations = get_action('term_translation_show')(
-            {},
+    translations = ckan.logic.action.get.term_translation_show(
+            {'model': ckan.model},
             {'terms': terms,
                 'lang_codes': (desired_lang_code, fallback_lang_code)})
     # Transform the translations into a more convenient structure.
@@ -163,8 +165,7 @@ def translate_resource_data_dict(data_dict: dict[str, Any]):
             if value in desired_translations:
                 translated_flattened[key] = desired_translations[value]
             elif value in fallback_translations:
-                translated_flattened[key] = fallback_translations.get(
-                    value, value)
+                translated_flattened[key] = fallback_translations.get(value, value)
             else:
                 translated_flattened[key] = value
 
@@ -172,14 +173,14 @@ def translate_resource_data_dict(data_dict: dict[str, Any]):
             # Don't try to translate values that aren't strings.
             translated_flattened[key] = value
 
-        elif isinstance(value, str):
+        elif isinstance(value, string_types):
             if value in desired_translations:
                 translated_flattened[key] = desired_translations[value]
             else:
                 translated_flattened[key] = fallback_translations.get(
                         value, value)
 
-        elif isinstance(value, (int, dict)):
+        elif isinstance(value, (int, long, dict)):
             translated_flattened[key] = value
 
         else:
@@ -200,23 +201,22 @@ def translate_resource_data_dict(data_dict: dict[str, Any]):
 KEYS_TO_IGNORE = ['state', 'revision_id', 'id', #title done seperately
                   'metadata_created', 'metadata_modified', 'site_id']
 
+class MultilingualDataset(SingletonPlugin):
+    implements(IPackageController, inherit=True)
+    LANGS = config.get('ckan.locale_order', 'en').split(" ")
 
-class MultilingualDataset(plugins.SingletonPlugin):
-    plugins.implements(plugins.IPackageController, inherit=True)
-    LANGS = config.get('ckan.locale_order') or ["en"]
-
-    def before_dataset_index(self, search_data: dict[str, Any]):
+    def before_index(self, search_data):
 
         default_lang = search_data.get(
             'lang_code',
-             config.get('ckan.locale_default')
+             config.get('ckan.locale_default', 'en')
         )
 
         ## translate title
         title = search_data.get('title')
         search_data['title_' + default_lang] = title
         title_translations = get_action('term_translation_show')(
-                          {},
+                          {'model': ckan.model},
                           {'terms': [title],
                            'lang_codes': self.LANGS})
 
@@ -226,17 +226,17 @@ class MultilingualDataset(plugins.SingletonPlugin):
 
         ## translate rest
         all_terms = []
-        for key, value in sorted(search_data.items()):
+        for key, value in sorted(six.iteritems(search_data)):
             if key in KEYS_TO_IGNORE or key.startswith('title'):
                 continue
             if not isinstance(value, list):
                 value = [value]
             for item in value:
-                if isinstance(item, str):
+                if isinstance(item, string_types):
                     all_terms.append(item)
 
         field_translations = get_action('term_translation_show')(
-                          {},
+                          {'model': ckan.model},
                           {'terms': all_terms,
                            'lang_codes': self.LANGS})
 
@@ -244,24 +244,22 @@ class MultilingualDataset(plugins.SingletonPlugin):
 
         text_field_items['text_' + default_lang].extend(all_terms)
 
-        for translation in sorted(
-                field_translations,
-                key=lambda tr: all_terms.index(tr['term'])):
+        for translation in sorted(field_translations, key=lambda tr: all_terms.index(tr['term'])):
             lang_field = 'text_' + translation['lang_code']
             text_field_items[lang_field].append(translation['term_translation'])
 
-        for key, value in text_field_items.items():
+        for key, value in six.iteritems(text_field_items):
             search_data[key] = ' '.join(value)
 
         return search_data
 
-    def before_dataset_search(self, search_params: dict[str, Any]):
+    def before_search(self, search_params):
         lang_set = set(self.LANGS)
 
         try:
-            current_lang: str = request.environ['CKAN_LANG']
+            current_lang = request.environ['CKAN_LANG']
         except TypeError as err:
-            if str(err) == ('No object (name: request) has been registered '
+            if err.message == ('No object (name: request) has been registered '
                                'for this thread'):
                 # This happens when this code gets called as part of a paster
                 # command rather then as part of an HTTP request.
@@ -290,8 +288,7 @@ class MultilingualDataset(plugins.SingletonPlugin):
 
         return search_params
 
-    def after_dataset_search(self, search_results: dict[str, Any],
-                             search_params: dict[str, Any]):
+    def after_search(self, search_results, search_params):
 
         # Translate the unselected search facets.
         facets = search_results.get('search_facets')
@@ -299,7 +296,7 @@ class MultilingualDataset(plugins.SingletonPlugin):
             return search_results
 
         desired_lang_code = request.environ['CKAN_LANG']
-        fallback_lang_code = config.get('ckan.locale_default')
+        fallback_lang_code = config.get('ckan.locale_default', 'en')
 
         # Look up translations for all of the facets in one db query.
         terms = set()
@@ -307,7 +304,7 @@ class MultilingualDataset(plugins.SingletonPlugin):
             for item in facet['items']:
                 terms.add(item['display_name'])
         translations = get_action('term_translation_show')(
-                {},
+                {'model': ckan.model},
                 {'terms': terms,
                     'lang_codes': (desired_lang_code, fallback_lang_code)})
 
@@ -330,7 +327,7 @@ class MultilingualDataset(plugins.SingletonPlugin):
 
         return search_results
 
-    def before_dataset_view(self, dataset_dict: dict[str, Any]):
+    def before_view(self, dataset_dict):
 
         # Translate any selected search facets (e.g. if we are rendering a
         # group read page or the dataset index page): lookup translations of
@@ -338,17 +335,17 @@ class MultilingualDataset(plugins.SingletonPlugin):
         # and save them in c.translated_fields where the templates can
         # retrieve them later.
         desired_lang_code = request.environ['CKAN_LANG']
-        fallback_lang_code = config.get('ckan.locale_default')
+        fallback_lang_code = config.get('ckan.locale_default', 'en')
         try:
-            fields = g.fields
+            fields = c.fields
         except AttributeError:
             return translate_data_dict(dataset_dict)
-        terms = [value for _param, value in fields]
+        terms = [value for param, value in fields]
         translations = get_action('term_translation_show')(
-                {},
+                {'model': ckan.model},
                 {'terms': terms,
                  'lang_codes': (desired_lang_code, fallback_lang_code)})
-        g.translated_fields = {}
+        c.translated_fields = {}
         for param, value in fields:
             matching_translations = [translation for translation in
                     translations if translation['term'] == value and
@@ -360,12 +357,12 @@ class MultilingualDataset(plugins.SingletonPlugin):
             if matching_translations:
                 assert len(matching_translations) == 1
                 translation = matching_translations[0]['term_translation']
-                g.translated_fields[(param, value)] = translation
+                c.translated_fields[(param, value)] = translation
 
         # Now translate the fields of the dataset itself.
         return translate_data_dict(dataset_dict)
 
-class MultilingualGroup(plugins.SingletonPlugin):
+class MultilingualGroup(SingletonPlugin):
     '''The MultilingualGroup plugin translates group names and other group
     fields on group read pages and on the group index page.
 
@@ -376,14 +373,14 @@ class MultilingualGroup(plugins.SingletonPlugin):
     MultilingualDataset plugin.
 
     '''
-    plugins.implements(plugins.IGroupController, inherit=True)
-    plugins.implements(plugins.IOrganizationController, inherit=True)
+    implements(IGroupController, inherit=True)
+    implements(IOrganizationController, inherit=True)
 
-    def before_view(self, data_dict: dict[str, Any]):
+    def before_view(self, data_dict):
         translated_data_dict = translate_data_dict(data_dict)
         return translated_data_dict
 
-class MultilingualTag(plugins.SingletonPlugin):
+class MultilingualTag(SingletonPlugin):
     '''The MultilingualTag plugin translates tag names on tag read pages and
     on the tag index page.
 
@@ -394,19 +391,19 @@ class MultilingualTag(plugins.SingletonPlugin):
     MultilingualDataset plugin.
 
     '''
-    plugins.implements(plugins.ITagController, inherit=True)
+    implements(ITagController, inherit=True)
 
-    def before_view(self, data_dict: dict[str, Any]):
+    def before_view(self, data_dict):
         translated_data_dict = translate_data_dict(data_dict)
         return translated_data_dict
 
-class MultilingualResource(plugins.SingletonPlugin):
-   '''The MultilinguaResource plugin translate the selected resource name and
-   description on resource preview page.
+class MultilingualResource(SingletonPlugin):
+   '''The MultilinguaResource plugin translate the selected resource name and description on resource
+   preview page.
 
    '''
-   plugins.implements(plugins.IResourceController, inherit=True)
+   implements(IResourceController, inherit=True)
 
-   def before_resource_show(self, data_dict: dict[str, Any]):
+   def before_show(self, data_dict):
         translated_data_dict = translate_resource_data_dict(data_dict)
         return translated_data_dict

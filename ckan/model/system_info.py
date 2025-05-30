@@ -7,16 +7,12 @@ configuration options.
 For more details, check :doc:`maintaining/configuration`.
 '''
 
-from typing import Any, Optional
-
 from sqlalchemy import types, Column, Table
-from sqlalchemy.orm import Mapped
-from sqlalchemy.exc import ProgrammingError
+from six import text_type
 
-
-import ckan.model.meta as meta
-import ckan.model.core as core
-import ckan.model.domain_object as domain_object
+from ckan.model import meta
+from ckan.model import core
+from ckan.model import domain_object
 
 __all__ = ['system_info_table', 'SystemInfo',
            'get_system_info', 'set_system_info']
@@ -26,34 +22,29 @@ system_info_table = Table(
     Column('id', types.Integer(),  primary_key=True, nullable=False),
     Column('key', types.Unicode(100), unique=True, nullable=False),
     Column('value', types.UnicodeText),
-    Column('state', types.UnicodeText, default=core.State.ACTIVE,
-           nullable=False),
+    Column('state', types.UnicodeText, default=core.State.ACTIVE),
 )
 
 
 class SystemInfo(core.StatefulObjectMixin,
                  domain_object.DomainObject):
-    id: Mapped[int]
-    key: Mapped[str]
-    value: Mapped[str]
-    state: Mapped[str]
 
-    def __init__(self, key: str, value: Any) -> None:
+    def __init__(self, key, value):
 
         super(SystemInfo, self).__init__()
 
         self.key = key
-        self.value = str(value)
+        self.value = text_type(value)
 
 
-meta.registry.map_imperatively(SystemInfo, system_info_table)
+meta.mapper(SystemInfo, system_info_table)
 
 
-def get_system_info(key: str, default: Optional[str]=None) -> Optional[str]:
+def get_system_info(key, default=None):
     ''' get data from system_info table '''
+    from sqlalchemy.exc import ProgrammingError
     try:
         obj = meta.Session.query(SystemInfo).filter_by(key=key).first()
-        meta.Session.commit()
         if obj:
             return obj.value
     except ProgrammingError:
@@ -62,7 +53,7 @@ def get_system_info(key: str, default: Optional[str]=None) -> Optional[str]:
 
 
 
-def delete_system_info(key: str) -> None:
+def delete_system_info(key, default=None):
     ''' delete data from system_info table '''
     obj = meta.Session.query(SystemInfo).filter_by(key=key).first()
     if obj:
@@ -70,16 +61,16 @@ def delete_system_info(key: str) -> None:
         meta.Session.commit()
 
 
-def set_system_info(key: str, value: str) -> bool:
+def set_system_info(key, value):
     ''' save data in the system_info table '''
     obj = None
     obj = meta.Session.query(SystemInfo).filter_by(key=key).first()
-    if obj and obj.value == str(value):
-        return False
+    if obj and obj.value == text_type(value):
+        return
     if not obj:
         obj = SystemInfo(key, value)
     else:
-        obj.value = str(value)
+        obj.value = text_type(value)
 
     meta.Session.add(obj)
     meta.Session.commit()

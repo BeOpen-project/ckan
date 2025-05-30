@@ -1,53 +1,43 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import logging
 import os
 import sys
-from typing import Any, Optional, TYPE_CHECKING, TypeVar, cast
 
 from flask import Blueprint
 
-import ckan.logic.schema as schema
-from ckan.lib.maintain import deprecated
-from ckan.common import g
-from ckan import logic, model, plugins
+from ckan.common import c, g
+from ckan import logic
+from ckan import plugins
 import ckan.authz
-from ckan.types import Context, DataDict, Schema
-from . import signals
-from .navl.dictization_functions import validate
-if TYPE_CHECKING:
-    from ckan.config.middleware.flask_app import CKANFlask
-
+import ckan.plugins.toolkit as toolkit
 
 log = logging.getLogger(__name__)
 
-PackagePlugin = TypeVar('PackagePlugin')
-GroupPlugin = TypeVar('GroupPlugin')
-OrganizationPlugin = TypeVar('OrganizationPlugin')
-
 # Mapping from package-type strings to IDatasetForm instances
-_package_plugins: dict[str, 'plugins.IDatasetForm'] = {}
+_package_plugins = {}
 # The fallback behaviour
-_default_package_plugin: Optional['plugins.IDatasetForm'] = None
+_default_package_plugin = None
 
 # Mapping from group-type strings to IGroupForm instances
-_group_plugins: dict[str, 'plugins.IGroupForm'] = {}
+_group_plugins = {}
 # The fallback behaviour
-_default_group_plugin: Optional['plugins.IGroupForm'] = None
-_default_organization_plugin: Optional['plugins.IGroupForm'] = None
+_default_group_plugin = None
+_default_organization_plugin = None
 # Mapping from group-type strings to controllers
-_group_controllers: dict[str, str] = {}
+_group_controllers = {}
+# Mapping from group-type strings to blueprints
+_group_blueprints = {}
 
 
-def reset_package_plugins() -> None:
+def reset_package_plugins():
     global _default_package_plugin
     _default_package_plugin = None
     global _package_plugins
     _package_plugins = {}
 
 
-def reset_group_plugins() -> None:
+def reset_group_plugins():
     global _default_group_plugin
     _default_group_plugin = None
     global _default_organization_plugin
@@ -58,7 +48,7 @@ def reset_group_plugins() -> None:
     _group_controllers = {}
 
 
-def lookup_package_plugin(package_type: Optional[str]=None) -> 'plugins.IDatasetForm':
+def lookup_package_plugin(package_type=None):
     """
     Returns the plugin controller associoated with the given package type.
 
@@ -66,39 +56,40 @@ def lookup_package_plugin(package_type: Optional[str]=None) -> 'plugins.IDataset
     fallback behaviour is used.
 
     """
-    assert _default_package_plugin
     if package_type is None:
         return _default_package_plugin
     return _package_plugins.get(package_type, _default_package_plugin)
 
 
-
-def lookup_group_plugin(group_type: Optional[str]=None) -> 'plugins.IGroupForm':
+def lookup_group_plugin(group_type=None):
     """
     Returns the form plugin associated with the given group type.
 
     If the group type is None or cannot be found in the mapping, then the
     fallback behaviour is used.
     """
-    assert _default_group_plugin
-    assert _default_organization_plugin
     if group_type is None:
         return _default_group_plugin
     return _group_plugins.get(group_type, _default_organization_plugin
         if group_type == 'organization' else _default_group_plugin)
 
 
-def lookup_group_controller(group_type: Optional[str]=None) -> Optional[str]:
+def lookup_group_controller(group_type=None):
     """
     Returns the group controller associated with the given group type. The
     controller is expressed as a string that you'd pass to url_to(controller=x)
     """
-    if group_type:
-        return _group_controllers.get(group_type)
-    return None
+    return _group_controllers.get(group_type)
 
 
-def register_package_plugins() -> None:
+def lookup_group_blueprints(group_type=None):
+    """
+    Returns the group blueprint
+    """
+    return _group_blueprints.get(group_type)
+
+
+def register_package_plugins():
     """
     Register the various IDatasetForm instances.
 
@@ -125,7 +116,7 @@ def register_package_plugins() -> None:
     set_default_package_plugin()
 
 
-def register_package_blueprints(app: 'CKANFlask') -> None:
+def register_package_blueprints(app):
     """
     Register a Flask blueprint for the various IDatasetForm instances.
 
@@ -163,8 +154,6 @@ def register_package_blueprints(app: 'CKANFlask') -> None:
                     dataset_blueprint)
             register_dataset_plugin_rules(dataset_blueprint)
 
-            signals.register_blueprint.send(
-                u"dataset", blueprint=dataset_blueprint)
             app.register_blueprint(dataset_blueprint)
 
             resource_blueprint = Blueprint(
@@ -177,8 +166,6 @@ def register_package_blueprints(app: 'CKANFlask') -> None:
                     package_type,
                     resource_blueprint)
             dataset_resource_rules(resource_blueprint)
-            signals.register_blueprint.send(
-                u"resource", blueprint=resource_blueprint)
             app.register_blueprint(resource_blueprint)
             log.debug(
                 'Registered blueprints for custom dataset type \'{}\''.format(
@@ -193,14 +180,13 @@ def register_package_blueprints(app: 'CKANFlask') -> None:
     app.register_blueprint(prefixed_resource)
 
 
-def set_default_package_plugin() -> None:
+def set_default_package_plugin():
     global _default_package_plugin
     if _default_package_plugin is None:
-        _default_package_plugin = cast(
-            plugins.IDatasetForm, DefaultDatasetForm())
+        _default_package_plugin = DefaultDatasetForm()
 
 
-def register_group_plugins() -> None:
+def register_group_plugins():
     """
     Register the various IGroupForm instances.
 
@@ -222,7 +208,7 @@ def register_group_plugins() -> None:
             group_controller = 'group'
 
         if hasattr(plugin, 'is_organization'):
-            is_organization: bool = plugin.is_organization
+            is_organization = plugin.is_organization
         else:
             is_organization = group_controller == 'organization'
 
@@ -255,7 +241,7 @@ def register_group_plugins() -> None:
     set_default_group_plugin()
 
 
-def register_group_blueprints(app: 'CKANFlask') -> None:
+def register_group_blueprints(app):
     """
     Register a Flask blueprint for the various IGroupForm instances.
 
@@ -274,7 +260,7 @@ def register_group_blueprints(app: 'CKANFlask') -> None:
             group_controller = 'group'
 
         if hasattr(plugin, 'is_organization'):
-            is_organization: bool = plugin.is_organization
+            is_organization = plugin.is_organization
         else:
             is_organization = group_controller == 'organization'
 
@@ -299,31 +285,25 @@ def register_group_blueprints(app: 'CKANFlask') -> None:
                 blueprint = plugin.prepare_group_blueprint(
                     group_type, blueprint)
             register_group_plugin_rules(blueprint)
-            signals.register_blueprint.send(
-                u"organization" if is_organization else u"group",
-                blueprint=blueprint)
             app.register_blueprint(blueprint)
 
 
-def set_default_group_plugin() -> None:
+def set_default_group_plugin():
     global _default_group_plugin
     global _default_organization_plugin
     global _group_controllers
     # Setup the fallback behaviour if one hasn't been defined.
     if _default_group_plugin is None:
-        _default_group_plugin = cast(plugins.IGroupForm, DefaultGroupForm())
+        _default_group_plugin = DefaultGroupForm()
     if _default_organization_plugin is None:
-        _default_organization_plugin = cast(
-            plugins.IGroupForm, DefaultOrganizationForm())
+        _default_organization_plugin = DefaultOrganizationForm()
     if 'group' not in _group_controllers:
         _group_controllers['group'] = 'group'
     if 'organization' not in _group_controllers:
         _group_controllers['organization'] = 'organization'
 
 
-def plugin_validate(
-        plugin: Any, context: Context,
-        data_dict: DataDict, schema: Schema, action: Any) -> Any:
+def plugin_validate(plugin, context, data_dict, schema, action):
     """
     Backwards compatibility with 2.x dataset group and org plugins:
     return a default validate method if one has not been provided.
@@ -333,10 +313,10 @@ def plugin_validate(
         if result is not None:
             return result
 
-    return validate(data_dict, schema, context)
+    return toolkit.navl_validate(data_dict, schema, context)
 
 
-def get_permission_labels() -> Any:
+def get_permission_labels():
     '''Return the permission label plugin (or default implementation)'''
     for plugin in plugins.PluginImplementations(plugins.IPermissionLabels):
         return plugin
@@ -344,7 +324,7 @@ def get_permission_labels() -> Any:
 
 
 class DefaultDatasetForm(object):
-    '''The default implementatinon of
+    '''The default implementation of
     :py:class:`~ckan.plugins.interfaces.IDatasetForm`.
 
     This class serves two purposes:
@@ -366,17 +346,16 @@ class DefaultDatasetForm(object):
        being registered.
 
     '''
-    def create_package_schema(self) -> Schema:
-        return schema.default_create_package_schema()
+    def create_package_schema(self):
+        return logic.schema.default_create_package_schema()
 
-    def update_package_schema(self) -> Schema:
-        return schema.default_update_package_schema()
+    def update_package_schema(self):
+        return logic.schema.default_update_package_schema()
 
-    def show_package_schema(self) -> Schema:
-        return schema.default_show_package_schema()
+    def show_package_schema(self):
+        return logic.schema.default_show_package_schema()
 
-    def setup_template_variables(self, context: Context,
-                                 data_dict: dict[str, Any]) -> None:
+    def setup_template_variables(self, context, data_dict):
         data_dict.update({'available_only': True})
 
         ## This is messy as auths take domain object not data_dict
@@ -387,28 +366,28 @@ class DefaultDatasetForm(object):
             if not context_pkg:
                 context['package'] = pkg
 
-    def new_template(self) -> str:
+    def new_template(self):
         return 'package/new.html'
 
-    def read_template(self) -> str:
+    def read_template(self):
         return 'package/read.html'
 
-    def edit_template(self) -> str:
+    def edit_template(self):
         return 'package/edit.html'
 
-    def search_template(self) -> str:
+    def search_template(self):
         return 'package/search.html'
 
-    def history_template(self) -> None:
+    def history_template(self):
         return None
 
-    def resource_template(self) -> str:
+    def resource_template(self):
         return 'package/resource_read.html'
 
-    def package_form(self) -> str:
+    def package_form(self):
         return 'package/new_package_form.html'
 
-    def resource_form(self) -> str:
+    def resource_form(self):
         return 'package/snippets/resource_form.html'
 
 
@@ -425,91 +404,74 @@ class DefaultGroupForm(object):
      - it provides the fallback behaviour if no plugin is setup to
        provide the fallback behaviour.
 
-    .. note:: this isn't a plugin implementation. This is deliberate, as we
-        don't want this being registered.
-
+    Note - this isn't a plugin implementation. This is deliberate, as we
+           don't want this being registered.
     """
-    def group_controller(self) -> str:
+    def group_controller(self):
         return 'group'
 
-    def new_template(self) -> str:
+    def new_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the 'new' page
         """
         return 'group/new.html'
 
-    def index_template(self) -> str:
+    def index_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the index page
         """
         return 'group/index.html'
 
-    def read_template(self) -> str:
+    def read_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the read page
         """
         return 'group/read.html'
 
-    def about_template(self) -> str:
+    def about_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the about page
         """
         return 'group/about.html'
 
-    def edit_template(self) -> str:
+    def edit_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the edit page
         """
         return 'group/edit.html'
 
-    def activity_template(self) -> str:
+    def activity_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the activity stream page
         """
         return 'group/activity_stream.html'
 
-    def admins_template(self) -> str:
+    def admins_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the admins page
         """
         return 'group/admins.html'
 
-    def bulk_process_template(self) -> str:
+    def bulk_process_template(self):
         """
         Returns a string representing the location of the template to be
         rendered for the bulk_process page
         """
         return 'group/bulk_process.html'
 
-    def group_form(self) -> str:
+    def group_form(self):
         return 'group/new_group_form.html'
 
-    def create_group_schema(self) -> Schema:
-        return schema.default_create_group_schema()
-
-    def update_group_schema(self) -> Schema:
-        return schema.default_update_group_schema()
-
-    def show_group_schema(self) -> Schema:
-        return schema.default_show_group_schema()
-
-    # Deprecated schema methods, to be removed in CKAN 2.12
-
-    @deprecated(
-        "Use either `create_group_schema()` or `update_group_schema()`",
-        since="2.11.0"
-    )
-    def form_to_db_schema_options(self,
-                                  options: dict[str, Any]) -> dict[str, Any]:
-        ''' [Deprecated] This allows us to select different schemas for
-        different purpose eg via the web interface or via the api or creation vs
+    def form_to_db_schema_options(self, options):
+        ''' This allows us to select different schemas for different
+        purpose eg via the web interface or via the api or creation vs
         updating. It is optional and if not available form_to_db_schema
         should be used.
         If a context is provided, and it contains a schema, it will be
@@ -527,32 +489,23 @@ class DefaultGroupForm(object):
         else:
             return self.form_to_db_schema()
 
-    @deprecated("Use `create_group_schema()`", since="2.11.0")
-    def form_to_db_schema_api_create(self) -> dict[str, Any]:
-        """ Deprecated """
-        return schema.default_create_group_schema()
+    def form_to_db_schema_api_create(self):
+        return logic.schema.default_group_schema()
 
-    @deprecated("Use `update_group_schema()`", since="2.11.0")
-    def form_to_db_schema_api_update(self) -> dict[str, Any]:
-        """ Deprecated """
-        return schema.default_update_group_schema()
+    def form_to_db_schema_api_update(self):
+        return logic.schema.default_update_group_schema()
 
-    @deprecated("Use `create_group_schema()`", since="2.11.0")
-    def form_to_db_schema(self) -> dict[str, Any]:
-        """ Deprecated """
-        return schema.default_create_group_schema()
+    def form_to_db_schema(self):
+        return logic.schema.group_form_schema()
 
-    @deprecated("Use `show_group_schema()`", since="2.11.0")
-    def db_to_form_schema(self) -> dict[str, Any]:
-        """ Deprecated """
-        return {}
+    def db_to_form_schema(self):
+        '''This is an interface to manipulate data from the database
+        into a format suitable for the form (optional)'''
 
-    @deprecated("Use `show_group_schema()`", since="2.11.0")
-    def db_to_form_schema_options(self,
-                                  options: dict[str, Any]) -> dict[str, Any]:
-        ''' [Deprecated] This allows the selection of different schemas
-        for different purposes.  It is optional and if not available,
-        ``db_to_form_schema`` should be used.
+    def db_to_form_schema_options(self, options):
+        '''This allows the selection of different schemas for different
+        purposes.  It is optional and if not available, ``db_to_form_schema``
+        should be used.
         If a context is provided, and it contains a schema, it will be
         returned.
         '''
@@ -561,53 +514,86 @@ class DefaultGroupForm(object):
             return schema
         return self.db_to_form_schema()
 
-    def setup_template_variables(self, context: Context,
-                                 data_dict: dict[str, Any]) -> None:
+    def check_data_dict(self, data_dict):
+        '''Check if the return data is correct, mostly for checking out
+        if spammers are submitting only part of the form
+
+        # Resources might not exist yet (eg. Add Dataset)
+        surplus_keys_schema = ['__extras', '__junk', 'state', 'groups',
+                               'extras_validation', 'save', 'return_to',
+                               'resources']
+
+        schema_keys = form_to_db_package_schema().keys()
+        keys_in_schema = set(schema_keys) - set(surplus_keys_schema)
+
+        missing_keys = keys_in_schema - set(data_dict.keys())
+
+        if missing_keys:
+            #print data_dict
+            #print missing_keys
+            log.info('incorrect form fields posted')
+            raise DataError(data_dict)
+        '''
         pass
+
+    def setup_template_variables(self, context, data_dict):
+        c.is_sysadmin = ckan.authz.is_sysadmin(c.user)
+
+        ## This is messy as auths take domain object not data_dict
+        context_group = context.get('group', None)
+        group = context_group or getattr(c, 'group', '')
+        if group:
+            try:
+                if not context_group:
+                    context['group'] = group
+                logic.check_access('group_change_state', context)
+                c.auth_for_change_state = True
+            except logic.NotAuthorized:
+                c.auth_for_change_state = False
+        else:
+            # needs to be set to get template displayed when flask request
+            c.group = ''
 
 
 class DefaultOrganizationForm(DefaultGroupForm):
-    def group_controller(self) -> str:
+    def group_controller(self):
         return 'organization'
 
-    def group_form(self) -> str:
+    def group_form(self):
         return 'organization/new_organization_form.html'
 
-    def setup_template_variables(self, context: Context,
-                                 data_dict: dict[str, Any]) -> None:
+    def setup_template_variables(self, context, data_dict):
         pass
 
-    def new_template(self) -> str:
+    def new_template(self):
         return 'organization/new.html'
 
-    def about_template(self) -> str:
+    def about_template(self):
         return 'organization/about.html'
 
-    def index_template(self) -> str:
+    def index_template(self):
         return 'organization/index.html'
 
-    def admins_template(self) -> str:
+    def admins_template(self):
         return 'organization/admins.html'
 
-    def bulk_process_template(self) -> str:
+    def bulk_process_template(self):
         return 'organization/bulk_process.html'
 
-    def read_template(self) -> str:
+    def read_template(self):
         return 'organization/read.html'
 
     # don't override history_template - use group template for history
 
-    def edit_template(self) -> str:
+    def edit_template(self):
         return 'organization/edit.html'
 
-    def activity_template(self) -> str:
+    def activity_template(self):
         return 'organization/activity_stream.html'
 
 
 class DefaultTranslation(object):
-    name: str
-
-    def i18n_directory(self) -> str:
+    def i18n_directory(self):
         '''Change the directory of the *.mo translation files
 
         The default implementation assumes the plugin is
@@ -617,9 +603,9 @@ class DefaultTranslation(object):
         # assume plugin is called ckanext.<myplugin>.<...>.PluginClass
         extension_module_name = '.'.join(self.__module__.split('.')[:3])
         module = sys.modules[extension_module_name]
-        return os.path.join(os.path.dirname(str(module.__file__)), 'i18n')
+        return os.path.join(os.path.dirname(module.__file__), 'i18n')
 
-    def i18n_locales(self) -> list[str]:
+    def i18n_locales(self):
         '''Change the list of locales that this plugin handles
 
         By default the will assume any directory in subdirectory in the
@@ -632,7 +618,7 @@ class DefaultTranslation(object):
                  if os.path.isdir(os.path.join(directory, d))
         ]
 
-    def i18n_domain(self) -> str:
+    def i18n_domain(self):
         '''Change the gettext domain handled by this plugin
 
         This implementation assumes the gettext domain is
@@ -649,7 +635,7 @@ class DefaultPermissionLabels(object):
     - users can read datasets belonging to their orgs "member-(org id)"
     - users can read datasets where they are collaborators "collaborator-(dataset id)"
     '''
-    def get_dataset_labels(self, dataset_obj: model.Package) -> list[str]:
+    def get_dataset_labels(self, dataset_obj):
         if dataset_obj.state == u'active' and not dataset_obj.private:
             return [u'public']
 
@@ -666,9 +652,9 @@ class DefaultPermissionLabels(object):
 
         return labels
 
-    def get_user_dataset_labels(self, user_obj: model.User) -> list[str]:
+    def get_user_dataset_labels(self, user_obj):
         labels = [u'public']
-        if not user_obj or user_obj.is_anonymous:
+        if not user_obj:
             return labels
 
         labels.append(u'creator-%s' % user_obj.id)

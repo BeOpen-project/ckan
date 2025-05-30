@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-import ckan.plugins as plugins
+
+import six
+
 from ckan.config.middleware import make_app
 from ckan.cli import load_config
 from ckan.common import config
@@ -23,7 +25,8 @@ def pytest_addoption(parser):
     try:
         parser.addoption(u"--ckan-ini", action=u"store")
     except ValueError as e:
-        if str(e) == 'option names {\'--ckan-ini\'} already added':
+        if all(x in str(e) for x in (
+                u"option names", u"ckan-ini", u"already added")):
             pass
         else:
             raise
@@ -49,27 +52,13 @@ def pytest_sessionstart(session):
     _config = config.copy()
 
 
-def pytest_runtestloop(session):
-    """When all the tests collected, extra plugin may be enabled because python
-    interpreter visits their files.
-
-    Make sure all normal plugins are disabled. If test requires a plugin, it
-    must rely on `with_plugins` fixture.
-
-    We keep system plugins enabled in order to keep auto-indexing of datasets
-    available without `with_plugins` fixture.
-
-    """
-    plugins.unload_non_system_plugins()
-
-
 def pytest_runtest_setup(item):
     """Automatically apply `ckan_config` fixture if test has `ckan_config`
     mark.
 
     `ckan_config` mark itself does nothing(as any mark). All actual
     config changes performed inside `ckan_config` fixture. So let's
-    implicitly use `ckan_config` fixture inside any test that patches
+    implicitely use `ckan_config` fixture inside any test that patches
     config object. This will save us from adding
     `@mark.usefixtures("ckan_config")` every time.
 

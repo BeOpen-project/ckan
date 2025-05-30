@@ -3,7 +3,6 @@
 # This file is code to do with vdm revisions, which was removed from CKAN after
 # version 2.8. It is only used by a migration and its tests.
 
-from typing import Any
 import uuid
 import six
 import datetime
@@ -20,7 +19,6 @@ import ckan.lib.dictization as d
 from ckan.lib.dictization.model_dictize import (
     _execute, resource_list_dictize, extras_list_dictize, group_list_dictize)
 from ckan import model
-from ckanext.activity.model import Activity
 
 
 # This is based on ckan.lib.dictization.model_dictize:package_dictize
@@ -46,9 +44,8 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
         # CKAN>2.8
         revision_model = RevisionTableMappings.instance()
 
-    is_latest_revision = not (
-        context.get(u'revision_id') or context.get(u'revision_date')
-    )
+    is_latest_revision = not(context.get(u'revision_id') or
+                             context.get(u'revision_date'))
     execute = _execute if is_latest_revision else _execute_with_revision
     # package
     if is_latest_revision:
@@ -57,7 +54,7 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
         result = pkg
     else:
         package_rev = revision_model.package_revision_table
-        q = select(package_rev).where(package_rev.c.id == pkg.id)
+        q = select([package_rev]).where(package_rev.c.id == pkg.id)
         result = execute(q, package_rev, context).first()
     if not result:
         raise logic.NotFound
@@ -76,7 +73,7 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
     mm_col = res._columns.get(u'metadata_modified')
     if mm_col is not None:
         res._columns.remove(mm_col)
-    q = select(res).where(res.c.package_id == pkg.id)
+    q = select([res]).where(res.c.package_id == pkg.id)
     result = execute(q, res, context)
     result_dict["resources"] = resource_list_dictize(result, context)
     result_dict['num_resources'] = len(result_dict.get(u'resources', []))
@@ -87,9 +84,9 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
         pkg_tag = model.package_tag_table
     else:
         pkg_tag = revision_model.package_tag_revision_table
-    q = select(tag, pkg_tag.c.state).join(
-        pkg_tag, tag.c.id == pkg_tag.c.tag_id
-    ).where(pkg_tag.c.package_id == pkg.id)  # type: ignore
+    q = select([tag, pkg_tag.c.state],
+               from_obj=pkg_tag.join(tag, tag.c.id == pkg_tag.c.tag_id)
+               ).where(pkg_tag.c.package_id == pkg.id)
     result = execute(q, pkg_tag, context)
     result_dict["tags"] = d.obj_list_dictize(result, context,
                                              lambda x: x["name"])
@@ -107,7 +104,7 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
         extra = model.package_extra_table
     else:
         extra = revision_model.extra_revision_table
-    q = select(extra).where(extra.c.package_id == pkg.id)
+    q = select([extra]).where(extra.c.package_id == pkg.id)
     result = execute(q, extra, context)
     result_dict["extras"] = extras_list_dictize(result, context)
 
@@ -117,13 +114,11 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
     else:
         member = revision_model.member_revision_table
     group = model.group_table
-    q = select(group, member.c.capacity).join(
-        member, group.c.id == member.c.group_id
-    ).where(  # type: ignore
-        member.c.table_id == pkg.id,
-        member.c.state == u'active',
-        group.c.is_organization == False  # noqa
-    )  # noqa
+    q = select([group, member.c.capacity],
+               from_obj=member.join(group, group.c.id == member.c.group_id)
+               ).where(member.c.table_id == pkg.id)\
+                .where(member.c.state == u'active') \
+                .where(group.c.is_organization == False)  # noqa
     result = execute(q, member, context)
     context['with_capacity'] = False
     # no package counts as cannot fetch from search index at the same
@@ -137,7 +132,7 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
         group = model.group_table
     else:
         group = revision_model.group_revision_table
-    q = select(group
+    q = select([group]
                ).where(group.c.id == result_dict['owner_org']) \
                 .where(group.c.state == u'active')
     result = execute(q, group, context)
@@ -153,11 +148,11 @@ def package_dictize_with_revisions(pkg, context, include_plugin_data=False):
     else:
         rel = revision_model \
             .package_relationship_revision_table
-    q = select(rel).where(rel.c.subject_package_id == pkg.id)
+    q = select([rel]).where(rel.c.subject_package_id == pkg.id)
     result = execute(q, rel, context)
     result_dict["relationships_as_subject"] = \
         d.obj_list_dictize(result, context)
-    q = select(rel).where(rel.c.object_package_id == pkg.id)
+    q = select([rel]).where(rel.c.object_package_id == pkg.id)
     result = execute(q, rel, context)
     result_dict["relationships_as_object"] = \
         d.obj_list_dictize(result, context)
@@ -253,7 +248,7 @@ def make_revisioned_table(base_table, frozen=False):
     for col in base_table.c:
         if col.primary_key:
             pkcols.append(col)
-    assert len(pkcols) <= 1, \
+    assert len(pkcols) <= 1,\
         u'Do not support versioning objects with multiple primary keys'
     fk_name = base_table.name + u'.' + pkcols[0].name
     revision_table.append_column(
@@ -340,7 +335,7 @@ class Revision(object):
     the revision attribute.
     '''
     def __init__(self, **kw):
-        for k, v in kw.items():
+        for k, v in six.iteritems(kw):
             setattr(self, k, v)
 
     # @property
@@ -374,7 +369,7 @@ def create_object_version(mapper_fn, base_object, rev_table):
     # If not need to do an explicit check
     class MyClass(object):
         def __init__(self, **kw):
-            for k, v in kw.items():
+            for k, v in six.iteritems(kw):
                 setattr(self, k, v)
 
     name = base_object.__name__ + u'Revision'
@@ -440,7 +435,8 @@ def create_object_version(mapper_fn, base_object, rev_table):
             else:
                 # TODO: actually deal with this
                 # raise a warning of some kind
-                pass
+                msg = \
+                    u'Skipping adding property %s to revisioned object' % prop
 
     return MyClass
 
@@ -503,7 +499,7 @@ def make_revision(instances):
     '''
     # model.repo.new_revision() was called in the model code, which is:
     # vdm.sqlalchemy.tools.Repository.new_revision() which did this:
-    Revision = RevisionTableMappings.instance().Revision  # noqa
+    Revision = RevisionTableMappings.instance().Revision
     revision = Revision()
     model.Session.add(revision)
     # new_revision then calls:
@@ -544,8 +540,8 @@ def make_revision(instances):
 
     # the related Activity would get the revision_id added to it too.
     # Here we simply assume it's the latest activity.
-    activity = model.Session.query(Activity) \
-        .order_by(Activity.timestamp.desc()) \
+    activity = model.Session.query(model.Activity) \
+        .order_by(model.Activity.timestamp.desc()) \
         .first()
     activity.revision_id = revision.id
     model.Session.flush()
@@ -591,7 +587,7 @@ def make_revision(instances):
 
 # Revision tables (singleton)
 class RevisionTableMappings(object):
-    _instance: Any = None
+    _instance = None
 
     @classmethod
     def instance(cls):
@@ -652,10 +648,14 @@ class RevisionTableMappings(object):
 
         self.package_relationship_revision_table = \
             make_revisioned_table(model.package_relationship_table)
+        # Commented because it gives an error, but we probably don't need it
+        # self.PackageRelationshipRevision = \
+        #     create_object_version(
+        #         model.meta.mapper, model.PackageRelationship,
+        #         self.package_relationship_revision_table)
 
         self.system_info_revision_table = \
             make_revisioned_table(model.system_info_table)
-
         self.SystemInfoRevision = create_object_version(
             model.meta.mapper, model.SystemInfo,
             self.system_info_revision_table)
@@ -673,7 +673,7 @@ class RevisionTableMappings(object):
 # It's easiest if this code works on all versions of CKAN. After CKAN 2.8 the
 # revision model is separate from the main model.
 try:
-    model.PackageExtraRevision  # type: ignore
+    model.PackageExtraRevision
     # CKAN<=2.8
     revision_model = model
 except AttributeError:

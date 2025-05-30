@@ -1,39 +1,41 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import re
-import logging
 from os import path
-from typing import Any, Iterable, Optional, Sequence, Union
+import logging
 
 from jinja2 import nodes
 from jinja2 import loaders
 from jinja2 import ext
-from jinja2.parser import Parser
 from jinja2.exceptions import TemplateNotFound
-from jinja2.utils import open_if_exists
-from markupsafe import escape
+from jinja2.utils import open_if_exists, escape
+from jinja2 import Environment
+from jinja2 import FileSystemBytecodeCache
 
+from six import text_type
+from six.moves import xrange
+
+import ckan.lib.base as base
 import ckan.lib.helpers as h
 from ckan.common import config
-from markupsafe import Markup
 
 
 log = logging.getLogger(__name__)
 
 
-def _get_extensions() -> list[Any]:
-    return ['jinja2.ext.do', 'jinja2.ext.loopcontrols',
+def _get_extensions():
+    return ['jinja2.ext.do', 'jinja2.ext.with_',
             SnippetExtension,
             CkanExtend,
             CkanInternationalizationExtension,
             LinkForExtension,
+            ResourceExtension,
             UrlForStaticExtension,
             UrlForExtension,
             AssetExtension]
 
 
-def get_jinja_env_options() -> dict[str, Any]:
+def get_jinja_env_options():
     return dict(
         loader=CkanFileSystemLoader(config['computed_template_paths']),
         autoescape=True,
@@ -43,7 +45,7 @@ def get_jinja_env_options() -> dict[str, Any]:
 
 ### Filters
 
-def empty_and_escape(value: Optional[str]) -> Union[str, Markup]:
+def empty_and_escape(value):
     ''' returns '' for a None value else escapes the content useful for form
     elements. '''
     if value is None:
@@ -53,19 +55,19 @@ def empty_and_escape(value: Optional[str]) -> Union[str, Markup]:
 
 ### Tags
 
-def regularise_html(html: Optional[str]) -> Optional[str]:
+def regularise_html(html):
     ''' Take badly formatted html with strings etc and make it beautiful
     generally remove surlus whitespace and kill \n this will break <code><pre>
     tags but they should not be being translated '''
     if html is None:
-        return None
+        return
     html = re.sub('\n', ' ', html)
-    matches = re.findall(r'(<[^>]*>|%[^%]\([^)]*\)\w|[^<%]+|%)', html)
-    for i in range(len(matches)):
+    matches = re.findall('(<[^>]*>|%[^%]\([^)]*\)\w|[^<%]+|%)', html)
+    for i in xrange(len(matches)):
         match = matches[i]
         if match.startswith('<') or match.startswith('%'):
             continue
-        matches[i] = re.sub(r'\s{2,}', ' ', match)
+        matches[i] = re.sub('\s{2,}', ' ', match)
     html = ''.join(matches)
     return html
 
@@ -73,8 +75,8 @@ def regularise_html(html: Optional[str]) -> Optional[str]:
 class CkanInternationalizationExtension(ext.InternationalizationExtension):
     ''' Custom translation to allow cleaned up html '''
 
-    def parse(self, parser: Any) -> Any:
-        node: Any = ext.InternationalizationExtension.parse(self, parser)
+    def parse(self, parser):
+        node = ext.InternationalizationExtension.parse(self, parser)
         if isinstance(node, list):
             args = getattr(node[1].nodes[0], 'args', None)
         else:
@@ -83,7 +85,7 @@ class CkanInternationalizationExtension(ext.InternationalizationExtension):
             for arg in args:
                 if isinstance(arg, nodes.Const):
                     value = arg.value
-                    if isinstance(value, str):
+                    if isinstance(value, text_type):
                         arg.value = regularise_html(value)
         return node
 
@@ -95,7 +97,7 @@ class CkanExtend(ext.Extension):
 
     tags = set(['ckan_extends'])
 
-    def __init__(self, environment: Any):
+    def __init__(self, environment):
         ext.Extension.__init__(self, environment)
         try:
             self.searchpath = environment.loader.searchpath[:]
@@ -103,21 +105,19 @@ class CkanExtend(ext.Extension):
             # this isn't available on message extraction
             pass
 
-    def parse(self, parser: Any):
+    def parse(self, parser):
         lineno = next(parser.stream).lineno
         node = nodes.Extends(lineno)
         template_path = parser.filename
         # find where in the search path this template is from
-        searchpath = None
         current_path = None
-
         if not hasattr(self, 'searchpath'):
             return node
         for searchpath in self.searchpath:
             if template_path.startswith(searchpath):
                 current_path = searchpath
                 break
-        assert searchpath and current_path
+
         # get filename from full path
         filename = template_path[len(searchpath) + 1:]
 
@@ -184,7 +184,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 =====================================================================
     '''
 
-    def get_source(self, environment: Any, template: str) -> Any:
+    def get_source(self, environment, template):
         # if the template name starts with * then this should be
         # treated specially.
         # format is *<search path parent directory>*<template name>
@@ -197,18 +197,6 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
             searchpaths = self.searchpath[index + 1:]
         else:
             searchpaths = self.searchpath
-        # § snippet wrapper
-        smatch = re.match(r'([^"]+)§(\w+(?:,\w+)*)?([.]\w+)$', template)
-        if smatch:
-            # check for TemplateNotFound on real template
-            args = ',' + smatch[2] if smatch[2] else ''
-            return (
-                f'{{% macro snippet(_template{args}) %}}'
-                f'{{% include _template %}}'
-                f'{{% endmacro %}}',
-                template,
-                lambda: True
-            )
         # end of ckan changes
         pieces = loaders.split_template_path(template)
         for searchpath in searchpaths:
@@ -244,12 +232,12 @@ class BaseExtension(ext.Extension):
     {% tag_name args, kw %}
     after parsing it will call _call(args, kw) which must be defined. '''
 
-    def parse(self, parser: Any) -> Any:
+    def parse(self, parser):
         stream = parser.stream
         tag = next(stream)
         # get arguments
-        args: list[Any] = []
-        kwargs: list[Any] = []
+        args = []
+        kwargs = []
         while not stream.current.test_any('block_end'):
             if args or kwargs:
                 stream.expect('comma')
@@ -257,77 +245,33 @@ class BaseExtension(ext.Extension):
                 key = nodes.Const(next(stream).value)
                 stream.skip()
                 value = parser.parse_expression()
-                kwargs.append(nodes.Pair(
-                    key, value,
-                    lineno=key.lineno
-                ))
+                kwargs.append(nodes.Pair(key, value, lineno=key.lineno))
             else:
                 args.append(parser.parse_expression())
 
-        def make_call_node(*kw: Any) -> Any:
+        def make_call_node(*kw):
             return self.call_method('_call', args=[
                 nodes.List(args),
                 nodes.Dict(kwargs),
-            ], kwargs=list(kw))
+            ], kwargs=kw)
 
         return nodes.Output([make_call_node()]).set_lineno(tag.lineno)
 
 
-class SnippetExtension(ext.Extension):
+class SnippetExtension(BaseExtension):
     ''' Custom snippet tag
 
     {% snippet <template_name> [, <fallback_template_name>]...
                [, <keyword>=<value>]... %}
 
-    renders <template_name> with <keyword>=<value> as local variables
+    see lib.helpers.snippet() for more details.
     '''
 
-    tags = {'snippet'}
+    tags = set(['snippet'])
 
-    def parse(self, parser: Parser):
-        lineno = next(parser.stream).lineno
-        templates: list[nodes.Expr] = []
-        targets: list[nodes.Name] = []
-        kwargs: list[nodes.Keyword] = []
-        while not parser.stream.current.test_any('block_end'):
-            if templates or targets:
-                parser.stream.expect('comma')
-            if parser.stream.current.test('name') and parser.stream.look().test('assign'):
-                key = parser.parse_assign_target()
-                key.set_ctx('param')
-                targets.append(key)
-                parser.stream.expect('assign')
-                value = parser.parse_expression()
-                kwargs.append(nodes.Keyword(key.name, value, lineno=lineno))
-            else:
-                templates.append(parser.parse_expression())
-
-        imp = nodes.FromImport(lineno=lineno)
-        args = '§' + ','.join(targ.name for targ in targets)
-        template = 'dynamic' + args + '.html'
-        if isinstance(templates[0], nodes.Const):
-            template = args.join(path.splitext(templates[0].value))
-        imp.template = nodes.Const(template)
-        imp.names = ['snippet']
-        imp.with_context = False
-        nam = nodes.Name('snippet', 'load', lineno=lineno)
-        call = nodes.Call(
-            nam,
-            [nodes.List(templates, lineno=lineno)],
-            kwargs,
-            None,
-            None,
-            lineno=lineno
-        )
-        call.node = nam
-        out = nodes.Output(lineno=lineno)
-        out.nodes = [call]
-        wit = nodes.With(lineno=lineno)
-        wit.targets = []
-        wit.values = []
-        wit.body = [imp, out]
-        return wit
-
+    @classmethod
+    def _call(cls, args, kwargs):
+        return base.render_snippet(*args, **kwargs)
 
 class UrlForStaticExtension(BaseExtension):
     ''' Custom url_for_static tag for getting a path for static assets.
@@ -340,7 +284,7 @@ class UrlForStaticExtension(BaseExtension):
     tags = set(['url_for_static'])
 
     @classmethod
-    def _call(cls, args: Sequence[Any], kwargs: dict[str, Any]):
+    def _call(cls, args, kwargs):
         assert len(args) == 1
         return h.url_for_static(args[0], **kwargs)
 
@@ -355,7 +299,7 @@ class UrlForExtension(BaseExtension):
     tags = set(['url_for'])
 
     @classmethod
-    def _call(cls, args: Iterable[Any], kwargs: dict[str, Any]):
+    def _call(cls, args, kwargs):
         return h.url_for(*args, **kwargs)
 
 
@@ -370,8 +314,25 @@ class LinkForExtension(BaseExtension):
     tags = set(['link_for'])
 
     @classmethod
-    def _call(cls, args: Iterable[Any], kwargs: dict[str, Any]):
+    def _call(cls, args, kwargs):
         return h.nav_link(*args, **kwargs)
+
+class ResourceExtension(BaseExtension):
+    ''' Deprecated. Custom include_resource tag.
+
+    {% resource <resource_name> %}
+
+    see lib.helpers.include_resource() for more details.
+    '''
+
+    tags = set(['resource'])
+
+    @classmethod
+    def _call(cls, args, kwargs):
+        assert len(args) == 1
+        assert len(kwargs) == 0
+        h.include_resource(args[0], **kwargs)
+        return ''
 
 
 class AssetExtension(BaseExtension):
@@ -385,8 +346,42 @@ class AssetExtension(BaseExtension):
     tags = set(['asset'])
 
     @classmethod
-    def _call(cls, args: Sequence[Any], kwargs: dict[str, Any]):
+    def _call(cls, args, kwargs):
         assert len(args) == 1
         assert len(kwargs) == 0
         h.include_asset(args[0])
         return ''
+
+
+'''
+The following function is based on jinja2 code
+
+Provides a class that holds runtime and parsing time options.
+
+:copyright: (c) 2010 by the Jinja Team.
+:license: BSD, see LICENSE for more details.
+'''
+
+def jinja2_getattr(self, obj, attribute):
+    """Get an item or attribute of an object but prefer the attribute.
+    Unlike :meth:`getitem` the attribute *must* be a bytestring.
+
+    This is a customised version to work with properties
+    """
+    try:
+        value = getattr(obj, attribute)
+        if isinstance(value, property):
+            value = value.fget()
+        return value
+    except AttributeError:
+        pass
+    try:
+        value = obj[attribute]
+        if isinstance(value, property):
+            value = value.fget()
+        return value
+    except (TypeError, LookupError, AttributeError):
+        return self.undefined(obj=obj, name=attribute)
+
+setattr(Environment, 'get_attr', jinja2_getattr)
+del jinja2_getattr

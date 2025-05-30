@@ -1,82 +1,92 @@
 # encoding: utf-8
 
-import re
 import pytest
+import six
 from flask import Blueprint, render_template
 
 import ckan.lib.helpers as h
 import ckan.plugins as p
-from ckan.lib.redis import connect_to_redis
+from ckan.lib.base import render as pylons_render
 from ckan.tests.helpers import body_contains
 
 
-@pytest.mark.ckan_config("ckan.plugins", "test_flash_plugin")
+@pytest.mark.ckan_config(u"ckan.plugins", u"test_flash_plugin")
+@pytest.mark.usefixtures(u"with_request_context")
 class TestWithFlashPlugin:
-    def test_flash_success(self, app):
+    # @pytest.mark.skipif(six.PY3, reason=u"There is no pylons app in Py3")
+    def test_flash_populated_by_flask_redirect_to_flask(self, app):
+        u"""
+        Flash store is populated by Flask view is accessible by another Flask
+        view.
         """
-        Test flash_success messages are rendered.
-        """
-        url = "/flash_success_redirect"
+        url = u"/flask_add_flash_message_redirect_to_flask"
         res = app.get(url)
-        assert body_contains(res, "This is a success message")
-        assert body_contains(res, 'alert-success')
+        assert body_contains(res, u"This is a success message populated by Flask")
 
-    def test_flash_success_with_html(self, app):
+    @pytest.mark.skipif(six.PY3, reason=u"There is no pylons app in Py3")
+    def test_flash_populated_in_pylons_action_redirect_to_flask(self, app):
+        u"""
+        Flash store is populated by pylons action is accessible by Flask view.
         """
-        Test flash_success messages are rendered.
+        res = app.get(u"/pylons_add_flash_message_redirect_view")
+
+        assert body_contains(res, u"This is a success message populated by Pylons")
+
+    @pytest.mark.skipif(six.PY3, reason=u"There is no pylons app in Py3")
+    def test_flash_populated_in_flask_view_redirect_to_pylons(self, app):
+        u"""
+        Flash store is populated by flask view is accessible by pylons action.
         """
-        url = "/flash_success_html_redirect"
-        res = app.get(url)
-        assert body_contains(res, "<h1> This is a success message with HTML</h1>")
-        assert body_contains(res, 'alert-success')
+        res = app.get(u"/flask_add_flash_message_redirect_pylons")
+
+        assert body_contains(res, u"This is a success message populated by Flask")
 
 
 class FlashMessagePlugin(p.SingletonPlugin):
-    """
-    A Flask compatible IBlueprint plugin to add Flask views to display flash
-    messages.
+    u"""
+    A Flask and Pylons compatible IRoutes/IBlueprint plugin to add Flask views
+    and Pylons actions to display flash messages.
     """
 
+    p.implements(p.IRoutes, inherit=True)
     p.implements(p.IBlueprint)
 
     def flash_message_view(self):
-        """Flask view that renders the flash message html template."""
-        return render_template("tests/flash_messages.html")
+        u"""Flask view that renders the flash message html template."""
+        return render_template(u"tests/flash_messages.html")
 
-    def add_flash_success_message(self):
-        """Add flash message, then redirect to render it."""
-        h.flash_success(u"This is a success message")
+    def add_flash_message_view_redirect_to_flask(self):
+        u"""Add flash message, then redirect to Flask view to render it."""
+        h.flash_success(u"This is a success message populated by Flask")
         return h.redirect_to(
-            h.url_for("test_flash_plugin.flash_message_view")
+            h.url_for(u"test_flash_plugin.flash_message_view")
         )
 
-    def add_flash_success_message_with_html(self):
-        """Add flash message, then redirect to render it."""
-        h.flash_success(u"<h1> This is a success message with HTML</h1>", allow_html=True)
-        return h.redirect_to(
-            h.url_for("test_flash_plugin.flash_message_view")
-        )
+    def add_flash_message_view_redirect_to_pylons(self):
+        u"""Add flash message, then redirect to view that renders it"""
+        h.flash_success(u"This is a success message populated by Flask")
+        return h.redirect_to(u"/pylons_view_flash_message")
 
     def get_blueprint(self):
-        """Return Flask Blueprint object."""
+        u"""Return Flask Blueprint object to be registered by the Flask app."""
 
         # Create Blueprint for plugin
         blueprint = Blueprint(self.name, self.__module__)
         # Add plugin url rules to Blueprint object
         rules = [
             (
-                "/flash_success_redirect",
-                "add_flash_success_message",
-                self.add_flash_success_message,
+                u"/flask_add_flash_message_redirect_to_flask",
+                u"add_flash_message",
+                self.add_flash_message_view_redirect_to_flask,
             ),
             (
-                "/flash_success_html_redirect",
-                "add_flash_success_message_with_html",
-                self.add_flash_success_message_with_html,
+                u"/flask_add_flash_message_redirect_pylons",
+                u"add_flash_message_view_redirect_to_pylons",
+                self.add_flash_message_view_redirect_to_pylons,
             ),
             (
-                "/flask_view_flash_message",
-                "flash_message_view",
+                u"/flask_view_flash_message",
+                u"flash_message_view",
                 self.flash_message_view,
             ),
         ]
@@ -85,40 +95,33 @@ class FlashMessagePlugin(p.SingletonPlugin):
 
         return blueprint
 
+    controller = (
+        u"ckan.tests.config.test_sessions:PylonsAddFlashMessageController"
+    )
 
-class TestSessionTypes:
-    @pytest.mark.usefixtures("clean_redis")
-    @pytest.mark.ckan_config("SESSION_TYPE", "redis")
-    def test_redis_storage(self, app, ckan_config, monkeypatch):
-        """Redis session interface creates a record in redis upon request.
-        """
-        redis = connect_to_redis()
-
-        assert not redis.keys("*")
-        response = app.get("/")
-
-        cookie = re.match(r'ckan=([^;]+)', response.headers['set-cookie'])
-        assert cookie
-
-        assert redis.keys("*") == [f"session:{cookie.group(1)}".encode()]
-
-    @pytest.mark.usefixtures("test_request_context")
-    def test_cookie_storage(self, app, user_factory, faker):
-        """User's ID added to session cookie upon login
-        """
-        password = faker.password()
-        user = user_factory(password=password)
-
-        response = app.post(h.url_for("user.login"), data={
-            "login": user["name"],
-            "password": password
-        })
-
-        cookie = re.match(r'ckan=([^;]+)', response.headers['set-cookie'])
-        assert cookie
-
-        serializer = app.flask_app.session_interface.get_signing_serializer(
-            app.flask_app
+    def before_map(self, _map):
+        u"""Update the pylons route map to be used by the Pylons app."""
+        _map.connect(
+            u"/pylons_add_flash_message_redirect_view",
+            controller=self.controller,
+            action=u"add_flash_message_redirect",
         )
-        data = serializer.loads(cookie.group(1))
-        assert data["_user_id"] == user["id"]
+
+        _map.connect(
+            u"/pylons_view_flash_message",
+            controller=self.controller,
+            action=u"flash_message_action",
+        )
+        return _map
+
+
+if six.PY2:
+    class PylonsAddFlashMessageController(p.toolkit.BaseController):
+        def flash_message_action(self):
+            u"""Pylons view to render flash messages in a template."""
+            return pylons_render(u"tests/flash_messages.html")
+
+        def add_flash_message_redirect(self):
+            # Adds a flash message and redirects to flask view
+            h.flash_success(u"This is a success message populated by Pylons")
+            return h.redirect_to(u"/flask_view_flash_message")

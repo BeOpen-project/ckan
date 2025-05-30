@@ -1,12 +1,18 @@
 # encoding: utf-8
 
 import logging
-from typing import Any
+
+from sqlalchemy.orm.exc import UnmappedInstanceError
 
 from ckan.lib.search import SearchIndexError
+from ckan.common import g
 
 import ckan.plugins as plugins
 import ckan.model as model
+
+domain_object = model.domain_object
+_package = model.package
+resource = model.resource
 
 log = logging.getLogger(__name__)
 
@@ -15,16 +21,21 @@ __all__ = ['DomainObjectModificationExtension']
 
 class DomainObjectModificationExtension(plugins.SingletonPlugin):
     """
-    Notify observers about domain object modifications before commit.
+    A domain object level interface to change notifications
 
-    Observers are other plugins implementing the IDomainObjectModification
-    interface.
+    Triggered by all edits to table and related tables, which we filter
+    out with check_real_change.
     """
 
-    def before_commit(self, session: Any):
+    plugins.implements(plugins.ISession, inherit=True)
+
+    def before_commit(self, session):
         self.notify_observers(session, self.notify)
 
-    def notify_observers(self, session: Any, method: Any):
+    def after_commit(self, session):
+        pass
+
+    def notify_observers(self, session, method):
         session.flush()
         if not hasattr(session, '_object_cache'):
             return
@@ -35,42 +46,54 @@ class DomainObjectModificationExtension(plugins.SingletonPlugin):
         deleted = obj_cache['deleted']
 
         for obj in set(new):
-            if isinstance(obj, (model.Package, model.Resource)):
-                method(obj, model.DomainObjectOperation.new)
+            if isinstance(obj, (_package.Package, resource.Resource)):
+                method(obj, domain_object.DomainObjectOperation.new)
         for obj in set(deleted):
-            if isinstance(obj, (model.Package, model.Resource)):
-                method(obj, model.DomainObjectOperation.deleted)
+            if isinstance(obj, (_package.Package, resource.Resource)):
+                method(obj, domain_object.DomainObjectOperation.deleted)
         for obj in set(changed):
-            if isinstance(obj, model.Resource):
-                method(obj, model.DomainObjectOperation.changed)
+            if isinstance(obj, resource.Resource):
+                method(obj, domain_object.DomainObjectOperation.changed)
             if getattr(obj, 'url_changed', False):
                 for item in plugins.PluginImplementations(plugins.IResourceUrlChange):
                     item.notify(obj)
 
-
-        changed_pkgs = set()
-        new_pkg_ids = [obj.id for obj in new if isinstance(obj, model.Package)]
-        for obj in changed:
-            if isinstance(obj, model.Package) and obj.id not in new_pkg_ids:
-                changed_pkgs.add(obj)
+        changed_pkgs = set(obj for obj in changed
+                           if isinstance(obj, _package.Package))
 
         for obj in new | changed | deleted:
-            if not isinstance(obj, model.Package):
+            if not isinstance(obj, _package.Package):
                 try:
-                    changed_pkgs.update(obj.related_packages())
+                    related_packages = obj.related_packages()
                 except AttributeError:
                     continue
-
+                # this is needed to sort out vdm bug where pkg.as_dict does not
+                # work when the package is deleted.
+                for package in related_packages:
+                    if package and package not in deleted | new:
+                        changed_pkgs.add(package)
         for obj in changed_pkgs:
-            method(obj, model.DomainObjectOperation.changed)
+            method(obj, domain_object.DomainObjectOperation.changed)
 
-    def notify(self, entity: Any, operation: Any):
+    def notify(self, entity, operation):
         for observer in plugins.PluginImplementations(
                 plugins.IDomainObjectModification):
             try:
                 observer.notify(entity, operation)
             except SearchIndexError as search_error:
                 log.exception(search_error)
+
+                # userobj must be available inside rendered error template,
+                # though it become unbounded after session rollback because
+                # of this error. Expunge will prevent `UnboundedInstanceError`
+                # raised from error template.
+                try:
+                    model.Session.expunge(g.userobj)
+                # AttributeError - there is no such prop in `g`
+                # UnmappedInstanceError - g.userobj is None or empty string.
+                except (AttributeError, UnmappedInstanceError):
+                    pass
+
                 # Reraise, since it's pretty crucial to ckan if it can't index
                 # a dataset
                 raise

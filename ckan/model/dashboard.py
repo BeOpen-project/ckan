@@ -2,10 +2,7 @@
 
 import datetime
 import sqlalchemy
-from sqlalchemy.orm import Mapped
-import ckan.model.meta as meta
-from typing import Optional
-from typing_extensions import Self
+from ckan.model import meta
 
 dashboard_table = sqlalchemy.Table('dashboard', meta.metadata,
     sqlalchemy.Column('user_id', sqlalchemy.types.UnicodeText,
@@ -21,17 +18,14 @@ dashboard_table = sqlalchemy.Table('dashboard', meta.metadata,
 
 class Dashboard(object):
     '''Saved data used for the user's dashboard.'''
-    user_id: Mapped[str]
-    activity_stream_last_viewed: Mapped[datetime.datetime]
-    email_last_sent: Mapped[datetime.datetime]
 
-    def __init__(self, user_id: str) -> None:
+    def __init__(self, user_id):
         self.user_id = user_id
         self.activity_stream_last_viewed = datetime.datetime.utcnow()
         self.email_last_sent = datetime.datetime.utcnow()
 
     @classmethod
-    def get(cls, user_id: str) -> Optional[Self]:
+    def get(cls, user_id):
         '''Return the Dashboard object for the given user_id.
 
         If there's no dashboard row in the database for this user_id, a fresh
@@ -40,6 +34,12 @@ class Dashboard(object):
         '''
         query = meta.Session.query(Dashboard)
         query = query.filter(Dashboard.user_id == user_id)
-        return query.first()
+        try:
+            row = query.one()
+        except sqlalchemy.orm.exc.NoResultFound:
+            row = Dashboard(user_id)
+            meta.Session.add(row)
+            meta.Session.commit()
+        return row
 
-meta.registry.map_imperatively(Dashboard, dashboard_table)
+meta.mapper(Dashboard, dashboard_table)

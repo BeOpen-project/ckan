@@ -60,7 +60,7 @@ Imports
 
   Most of the current CKAN code base imports just the modules and
   then accesses names with ``module.name``. This allows circular
-  imports in some cases and may still be necessary for existing
+  imports in some cases and may still be necessary for exsiting
   code, but is not recommended for new code.
 
 - Make all imports at the start of the file, after the module docstring.
@@ -74,7 +74,7 @@ Imports
 Logging
 -------
 
-We use `the Python standard library's logging module <https://docs.python.org/3/library/logging.html>`_
+We use `the Python standard library's logging module <https://docs.python.org/2.7/library/logging.html>`_
 to log messages in CKAN, e.g.::
 
     import logging
@@ -106,7 +106,7 @@ replacement field, for example::
 
   _(' ... {foo} ... {bar} ...').format(foo='foo-value', bar='bar-value')
 
-.. _new .format() method: https://docs.python.org/3/library/stdtypes.html#str.format
+.. _new .format() method: http://docs.python.org/2/library/stdtypes.html#str.format
 
 
 Unicode handling
@@ -265,7 +265,7 @@ Use ``:raises:`` to document exceptions raised by public functions. The
 docstring should say what type of exception is raised and under what
 conditions. Use ``:py:class:`` to reference exception types. For example::
 
-    def member_list(context, data_dict):
+    def member_list(context, data_dict=None):
         '''Return the members of a group.
 
         ... (parameters and return values documented here) ...
@@ -384,7 +384,7 @@ Example of a ckan.logic.action API docstring:
 
         '''
 
-.. _Autodoc: https://www.sphinx-doc.org/en/master/usage/extensions/autodoc.html
+.. _Autodoc: http://sphinx.pocoo.org/ext/autodoc.html
 
 
 Some helpful tools for Python code quality

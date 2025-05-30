@@ -1,8 +1,8 @@
 # encoding: utf-8
 import re
+import mock
 
 import pytest
-import sqlalchemy as sa
 import sqlalchemy.orm as orm
 from sqlalchemy.exc import ProgrammingError
 
@@ -78,13 +78,13 @@ class TestGetTables(object):
         engine = db.get_write_engine()
         session = orm.scoped_session(orm.sessionmaker(bind=engine))
         create_tables = [
-            "CREATE TABLE test_a (id_a text)",
-            "CREATE TABLE test_b (id_b text)",
-            'CREATE TABLE "TEST_C" (id_c text)',
-            'CREATE TABLE test_d ("α/α" integer)',
+            u"CREATE TABLE test_a (id_a text)",
+            u"CREATE TABLE test_b (id_b text)",
+            u'CREATE TABLE "TEST_C" (id_c text)',
+            u'CREATE TABLE test_d ("α/α" integer)',
         ]
         for create_table_sql in create_tables:
-            session.execute(sa.text(create_table_sql))
+            session.execute(create_table_sql)
 
         test_cases = [
             (u"SELECT * FROM test_a", ["test_a"]),
@@ -135,7 +135,7 @@ class TestGetFunctions(object):
             u"CREATE TABLE test_b (name text, subject_id text)",
         ]
         for create_table_sql in create_tables:
-            session.execute(sa.text(create_table_sql))
+            session.execute(create_table_sql)
 
         test_cases = [
             (u"SELECT max(id) from test_a", ["max"]),
@@ -168,7 +168,7 @@ class TestGetFunctions(object):
             """
         ]
         for create_table_sql in create_tables:
-            session.execute(sa.text(create_table_sql))
+            session.execute(create_table_sql)
 
         context = {"connection": session.connection()}
 
@@ -192,16 +192,18 @@ class TestGetFunctions(object):
             u"CREATE TABLE test_b (name text, subject_id text)",
         ]
         for create_table_sql in create_tables:
-            session.execute(sa.text(create_table_sql))
+            session.execute(create_table_sql)
 
         test_cases = [
-            (u"""SELECT *
+            (
+                u"""SELECT *
                 FROM crosstab(
                     'SELECT extract(month from period)::text, test_b.name, trunc(avg(result),2)
                      FROM test_a, test_b
                      WHERE test_a.subject_id = test_b.subject_id')
                      AS final_result(month text, subject_1 numeric,subject_2 numeric);""",
-                ['crosstab', 'final_result', 'extract', 'trunc', 'avg']),
+                ['crosstab', 'final_result', 'extract', 'trunc', 'avg']
+            ),
         ]
 
         context = {"connection": session.connection()}

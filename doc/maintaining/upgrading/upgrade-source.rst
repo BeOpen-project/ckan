@@ -45,6 +45,9 @@ CKAN release you're upgrading to:
 
      pip install --upgrade -r requirements.txt
 
+   .. note::
+
+     For Python 2 replace `requirements.txt` with `requirements-py2.txt`
 
 #. Register any new or updated plugins:
 
@@ -73,7 +76,7 @@ CKAN release you're upgrading to:
 
    .. parsed-literal::
 
-    ckan -c /path/to/ckan.ini search-index rebuild -r --config=\ |ckan.ini|
+    ckan -c /path/to/ckan.ini search-index rebuild -r
 
    See :ref:`rebuild search index` for details of the
    ``ckan search-index rebuild`` command.

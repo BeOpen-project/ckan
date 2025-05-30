@@ -1,0 +1,100 @@
+# docker-compose build && docker-compose up -d
+# If "docker-compose logs ckan" shows DB not ready, run "docker-compose restart ckan" a few times.
+version: "3"
+
+volumes:
+  ckan_config:
+  ckan_home:
+  ckan_storage:
+  pg_data:
+  solr_data:
+
+services:
+  ckan:
+    container_name: ckan
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+          - CKAN_SITE_URL=${CKAN_SITE_URL}
+    links:
+      - db
+      - solr
+      - redis
+    depends_on:
+      - db
+    ports:
+      - "5000:5000"
+    environment:
+      - CKAN_SQLALCHEMY_URL=postgresql://ckan:${POSTGRES_PASSWORD}@db/ckan
+      - CKAN_DATASTORE_WRITE_URL=postgresql://ckan:${POSTGRES_PASSWORD}@db/datastore
+      - CKAN_DATASTORE_READ_URL=postgresql://datastore_ro:${DATASTORE_READONLY_PASSWORD}@db/datastore
+      - CKAN_SOLR_URL=http://solr:8983/solr/ckan
+      - CKAN_REDIS_URL=redis://redis:6379/1
+      - CKAN_DATAPUSHER_URL=http://datapusher:8800
+      - CKAN_SITE_URL=${CKAN_SITE_URL}
+      - CKAN_MAX_UPLOAD_SIZE_MB=${CKAN_MAX_UPLOAD_SIZE_MB}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - DS_RO_PASS=${DATASTORE_READONLY_PASSWORD}
+    volumes:
+      - ./plug.sh:/srv/app/plug.sh
+      - ckan_config:/etc/ckan
+      - ckan_home:/usr/lib/ckan
+      - ckan_storage:/var/lib/ckan
+      - ../../ckan/config/deployment.ini:/srv/app/ckan.ini
+      - ../../ckan/config/dcat_ap_full.yaml:/srv/app/src/ckanext-dcat/ckanext/dcat/schemas/dcat_ap_full.yaml
+      - ../../ckan/config/custom_dcat_ap_3_profile.py:/srv/app/src/ckanext-dcat/ckanext/dcat/profiles/custom_dcat_ap_3_profile.py
+      - ../../ckan/config/pyproject.toml:/srv/app/src/ckanext-dcat/pyproject.toml
+      #- ../../ckan/who.ini:/srv/app/who.ini
+      - ../../ckan/templates/home/snippets/promoted.html:/srv/app/src/ckan/ckan/templates/home/snippets/promoted.html
+      - ./beopen_logo.png:/srv/app/src/ckan/ckan/public/base/images/placeholder-420x220.png
+      #- ../../../ckan/ckan/i18n/:/srv/app/src/ckan/ckan/i18n/
+      #- ./test/:/srv/app/test/
+    #command: ["bash", "/srv/app/plug.sh"]
+    command: >
+      sh -c "
+        cd /srv/app/src/ckanext-dcat &&
+        pip install -e . &&
+        ckan run -H 0.0.0.0 -p 5000
+      "
+
+  datapusher:
+    container_name: datapusher
+    image: keitaro/ckan-datapusher:latest
+    ports:
+      - "8800:8800"
+ 
+
+  db:
+    container_name: db
+    build:
+      context: ../../
+      dockerfile: contrib/docker/postgresql/Dockerfile
+      args:
+        - DS_RO_PASS=${DATASTORE_READONLY_PASSWORD}
+        - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    environment:
+      - DS_RO_PASS=${DATASTORE_READONLY_PASSWORD}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - PGDATA=/var/lib/postgresql/data/db
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "ckan"]
+    ports:
+      - "8012:5432"
+  solr:
+    container_name: solr
+    build:
+      context: ../../
+      dockerfile: contrib/docker/solr/Dockerfile
+    volumes:
+      - solr_data:/opt/solr/server/solr/ckan/data
+    ports:
+      - "8014:8983"
+
+  redis:
+    container_name: redis
+    image: redis:latest
+    ports:
+      - "8013:6379"

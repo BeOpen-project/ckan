@@ -1,34 +1,35 @@
 # encoding: utf-8
 
 '''API functions for updating existing data in CKAN.'''
-from __future__ import annotations
 
-from ckan.types.logic import ActionResult
 import logging
 import datetime
 import time
 import json
-from typing import Any, Union, TYPE_CHECKING, cast
+
+from ckan.common import config
+import ckan.common as converters
+import six
+from six import text_type
 
 import ckan.lib.helpers as h
 import ckan.plugins as plugins
 import ckan.logic as logic
 import ckan.logic.schema as schema_
+import ckan.lib.dictization as dictization
 import ckan.lib.dictization.model_dictize as model_dictize
 import ckan.lib.dictization.model_save as model_save
 import ckan.lib.navl.dictization_functions as dfunc
 import ckan.lib.navl.validators as validators
 import ckan.lib.plugins as lib_plugins
+import ckan.lib.email_notifications as email_notifications
 import ckan.lib.search as search
 import ckan.lib.uploader as uploader
 import ckan.lib.datapreview
 import ckan.lib.app_globals as app_globals
 
-from ckan.common import _, config
-from ckan.types import Context, DataDict, ErrorDict, Schema
 
-if TYPE_CHECKING:
-    import ckan.model as model_
+from ckan.common import _, request
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +44,7 @@ ValidationError = logic.ValidationError
 _get_or_bust = logic.get_or_bust
 
 
-def resource_update(context: Context, data_dict: DataDict) -> ActionResult.ResourceUpdate:
+def resource_update(context, data_dict):
     '''Update a resource.
 
     To update a resource you must be authorized to update the dataset that the
@@ -64,31 +65,28 @@ def resource_update(context: Context, data_dict: DataDict) -> ActionResult.Resou
 
     '''
     model = context['model']
-    id: str = _get_or_bust(data_dict, "id")
+    id = _get_or_bust(data_dict, "id")
 
     if not data_dict.get('url'):
         data_dict['url'] = ''
 
     resource = model.Resource.get(id)
-    if resource is None:
-        raise NotFound('Resource was not found.')
-    context["resource"] = resource
-    old_resource_format = resource.format
-
     if not resource:
         log.debug('Could not find resource %s', id)
         raise NotFound(_('Resource was not found.'))
+
+    context["resource"] = resource
+    old_resource_format = resource.format
 
     _check_access('resource_update', context, data_dict)
     del context["resource"]
 
     package_id = resource.package.id
-    package_show_context: Union[Context, Any] = dict(context, for_update=True)
-    pkg_dict = _get_action('package_show')(
-        package_show_context, {'id': package_id})
+    package_show_context = dict(context, for_update=True, return_type='dict')
+    pkg_dict = _get_action('package_show')(package_show_context,
+        {'id': package_id})
 
-    resources = cast("list[dict[str, Any]]", pkg_dict['resources'])
-    for n, p in enumerate(resources):
+    for n, p in enumerate(pkg_dict['resources']):
         if p['id'] == id:
             break
     else:
@@ -101,20 +99,18 @@ def resource_update(context: Context, data_dict: DataDict) -> ActionResult.Resou
         data_dict['datastore_active'] = resource.extras['datastore_active']
 
     for plugin in plugins.PluginImplementations(plugins.IResourceController):
-        plugin.before_resource_update(context, pkg_dict['resources'][n],
-                                      data_dict)
+        plugin.before_update(context, pkg_dict['resources'][n], data_dict)
 
-    resources[n] = data_dict
+    pkg_dict['resources'][n] = data_dict
 
     try:
         context['use_cache'] = False
         updated_pkg_dict = _get_action('package_update')(context, pkg_dict)
     except ValidationError as e:
         try:
-            error_dict = cast("list[ErrorDict]", e.error_dict['resources'])[n]
+            raise ValidationError(e.error_dict['resources'][n])
         except (KeyError, IndexError):
-            error_dict = e.error_dict
-        raise ValidationError(error_dict)
+            raise ValidationError(e.error_dict)
 
     resource = _get_action('resource_show')(context, {'id': id})
 
@@ -126,13 +122,12 @@ def resource_update(context: Context, data_dict: DataDict) -> ActionResult.Resou
              'resource': resource})
 
     for plugin in plugins.PluginImplementations(plugins.IResourceController):
-        plugin.after_resource_update(context, resource)
+        plugin.after_update(context, resource)
 
     return resource
 
 
-def resource_view_update(
-        context: Context, data_dict: DataDict) -> ActionResult.ResourceViewUpdate:
+def resource_view_update(context, data_dict):
     '''Update a resource view.
 
     To update a resource_view you must be authorized to update the resource
@@ -157,7 +152,6 @@ def resource_view_update(
     view_plugin = ckan.lib.datapreview.get_view_plugin(resource_view.view_type)
     schema = (context.get('schema') or
               schema_.default_update_resource_view_schema(view_plugin))
-    assert view_plugin
     plugin_schema = view_plugin.info().get('schema', {})
     schema.update(plugin_schema)
 
@@ -167,10 +161,7 @@ def resource_view_update(
         raise ValidationError(errors)
 
     context['resource_view'] = resource_view
-    resource = model.Resource.get(resource_view.resource_id)
-    if resource is None:
-        raise NotFound('Resource was not found.')
-    context['resource'] = resource
+    context['resource'] = model.Resource.get(resource_view.resource_id)
 
     _check_access('resource_view_update', context, data_dict)
 
@@ -182,8 +173,7 @@ def resource_view_update(
         model.repo.commit()
     return model_dictize.resource_view_dictize(resource_view, context)
 
-def resource_view_reorder(
-        context: Context, data_dict: DataDict) -> ActionResult.ResourceViewReorder:
+def resource_view_reorder(context, data_dict):
     '''Reorder resource views.
 
     :param id: the id of the resource
@@ -201,8 +191,6 @@ def resource_view_reorder(
     if len(order) != len(set(order)):
         raise ValidationError({"order": "No duplicates allowed in order"})
     resource = model.Resource.get(id)
-    if resource is None:
-        raise NotFound('Resource was not found.')
     context['resource'] = resource
 
     _check_access('resource_view_reorder', context, data_dict)
@@ -228,8 +216,7 @@ def resource_view_reorder(
     return {'id': id, 'order': new_order}
 
 
-def package_update(
-        context: Context, data_dict: DataDict) -> ActionResult.PackageUpdate:
+def package_update(context, data_dict):
     '''Update a dataset (package).
 
     You must be authorized to edit the dataset and the groups that it belongs
@@ -260,6 +247,7 @@ def package_update(
 
     '''
     model = context['model']
+    session = context['session']
     name_or_id = data_dict.get('id') or data_dict.get('name')
     if name_or_id is None:
         raise ValidationError({'id': _('Missing value')})
@@ -277,9 +265,24 @@ def package_update(
 
     user = context['user']
     # get the schema
-
     package_plugin = lib_plugins.lookup_package_plugin(pkg.type)
-    schema = context.get('schema') or package_plugin.update_package_schema()
+    if 'schema' in context:
+        schema = context['schema']
+    else:
+        schema = package_plugin.update_package_schema()
+
+    if 'api_version' not in context:
+        # check_data_dict() is deprecated. If the package_plugin has a
+        # check_data_dict() we'll call it, if it doesn't have the method we'll
+        # do nothing.
+        check_data_dict = getattr(package_plugin, 'check_data_dict', None)
+        if check_data_dict:
+            try:
+                package_plugin.check_data_dict(data_dict, schema)
+            except TypeError:
+                # Old plugins do not support passing the schema so we need
+                # to ensure they still work.
+                package_plugin.check_data_dict(data_dict)
 
     resource_uploads = []
     for resource in data_dict.get('resources', []):
@@ -299,7 +302,9 @@ def package_update(
     data, errors = lib_plugins.plugin_validate(
         package_plugin, context, data_dict, schema, 'package_update')
     log.debug('package_update validate_errs=%r user=%s package=%s data=%r',
-              errors, user, context['package'].name, data)
+              errors, context.get('user'),
+              context.get('package').name if context.get('package') else '',
+              data)
 
     if errors:
         model.Session.rollback()
@@ -310,16 +315,7 @@ def package_update(
         {"metadata_modified": datetime.datetime.utcnow()})
     model.Session.refresh(pkg)
 
-    include_plugin_data = False
-    user_obj = context.get('auth_user_obj')
-    if user_obj:
-        plugin_data = data.get('plugin_data', False)
-        include_plugin_data = (
-            user_obj.sysadmin  # type: ignore
-            and plugin_data
-        )
-
-    pkg = model_save.package_dict_save(data, context, include_plugin_data)
+    pkg = model_save.package_dict_save(data, context)
 
     context_org_update = context.copy()
     context_org_update['ignore_auth'] = True
@@ -339,7 +335,18 @@ def package_update(
     for item in plugins.PluginImplementations(plugins.IPackageController):
         item.edit(pkg)
 
-        item.after_dataset_update(context, data)
+        item.after_update(context, data)
+
+    # Create activity
+    if not pkg.private:
+        user_obj = model.User.by_name(user)
+        if user_obj:
+            user_id = user_obj.id
+        else:
+            user_id = 'not logged in'
+
+        activity = pkg.activity_stream_item('changed', user_id)
+        session.add(activity)
 
     if not context.get('defer_commit'):
         model.repo.commit()
@@ -354,16 +361,12 @@ def package_update(
     # we could update the dataset so we should still be able to read it.
     context['ignore_auth'] = True
     output = data_dict['id'] if return_id_only \
-            else _get_action('package_show')(
-                context,
-                {'id': data_dict['id'],
-                "include_plugin_data": include_plugin_data
-            }
-        )
+            else _get_action('package_show')(context, {'id': data_dict['id']})
+
     return output
 
 
-def package_revise(context: Context, data_dict: DataDict) -> ActionResult.PackageRevise:
+def package_revise(context, data_dict):
     '''Revise a dataset (package) selectively with match, filter and
     update parameters.
 
@@ -465,8 +468,10 @@ def package_revise(context: Context, data_dict: DataDict) -> ActionResult.Packag
     if name_or_id is None:
         raise ValidationError({'match__id': _('Missing value')})
 
-    package_show_context = context.copy()
-    package_show_context['for_update'] = True
+    package_show_context = dict(
+        context,
+        return_type='dict',
+        for_update=True)
     orig = _get_action('package_show')(
         package_show_context,
         {'id': name_or_id})
@@ -482,10 +487,10 @@ def package_revise(context: Context, data_dict: DataDict) -> ActionResult.Packag
 
     if unmatched:
         model.Session.rollback()
-        raise ValidationError({'match': [
+        raise ValidationError([{'match': [
             '__'.join(str(p) for p in unm)
             for unm in unmatched
-        ]})
+        ]}])
 
     if 'filter' in data:
         orig_id = orig['id']
@@ -497,18 +502,18 @@ def package_revise(context: Context, data_dict: DataDict) -> ActionResult.Packag
             dfunc.update_merge_dict(orig, data['update'])
         except dfunc.DataError as de:
             model.Session.rollback()
-            raise ValidationError({'update': [de.error]})
+            raise ValidationError([{'update': [de.error]}])
 
     # update __extend keys before __#__* so that files may be
     # attached to newly added resources in the same call
-    for k, v in sorted(
-            data['update__'].items(),
-            key=lambda s: s[0][-6] if s[0].endswith('extend') else s[0]):
-        try:
+    try:
+        for k, v in sorted(
+                data['update__'].items(),
+                key=lambda s: s[0][-6] if s[0].endswith('extend') else s[0]):
             dfunc.update_merge_string_key(orig, k, v)
-        except dfunc.DataError as de:
-            model.Session.rollback()
-            raise ValidationError({k: [de.error]})
+    except dfunc.DataError as de:
+        model.Session.rollback()
+        raise ValidationError([{k: [de.error]}])
 
     _check_access('package_revise', context, {"update": orig})
 
@@ -517,15 +522,14 @@ def package_revise(context: Context, data_dict: DataDict) -> ActionResult.Packag
     # on update or "nothing changed" status once possible
     rval = {
         'package': _get_action('package_update')(
-            Context(context, package=pkg),
+            dict(context, package=pkg),
             orig)}
     if 'include' in data_dict:
         dfunc.filter_glob_match(rval, data_dict['include'])
     return rval
 
 
-def package_resource_reorder(
-        context: Context, data_dict: DataDict) -> ActionResult.PackageResourceReorder:
+def package_resource_reorder(context, data_dict):
     '''Reorder resources against datasets.  If only partial resource ids are
     supplied then these are assumed to be first and the other resources will
     stay in their original order
@@ -544,9 +548,8 @@ def package_resource_reorder(
     if len(set(order)) != len(order):
         raise ValidationError({'order': 'Must supply unique resource_ids'})
 
-    package_show_context: Union[Context, Any] = dict(context, for_update=True)
-    package_dict = _get_action('package_show')(
-        package_show_context, {'id': id})
+    package_show_context = dict(context, for_update=True, return_type='dict')
+    package_dict = _get_action('package_show')(package_show_context, {'id': id})
     existing_resources = package_dict.get('resources', [])
     ordered_resources = []
 
@@ -571,9 +574,7 @@ def package_resource_reorder(
     return {'id': id, 'order': [resource['id'] for resource in new_resources]}
 
 
-def _update_package_relationship(
-        relationship: 'model_.PackageRelationship', comment: str,
-        context: Context) -> dict[str, Any]:
+def _update_package_relationship(relationship, comment, context):
     model = context['model']
     api = context.get('api_version')
     ref_package_by = 'id' if api == 2 else 'name'
@@ -587,8 +588,7 @@ def _update_package_relationship(
     return rel_dict
 
 
-def package_relationship_update(
-        context: Context, data_dict: DataDict) -> ActionResult.PackageRelationshipUpdate:
+def package_relationship_update(context, data_dict):
     '''Update a relationship between two datasets (packages).
 
     The subject, object and type parameters are required to identify the
@@ -624,9 +624,9 @@ def package_relationship_update(
     if not pkg1:
         raise NotFound('Subject package %r was not found.' % id)
     if not pkg2:
-        raise NotFound('Object package %r was not found.' % id2)
+        return NotFound('Object package %r was not found.' % id2)
 
-    _data, errors = _validate(data_dict, schema, context)
+    data, errors = _validate(data_dict, schema, context)
     if errors:
         model.Session.rollback()
         raise ValidationError(errors)
@@ -642,38 +642,27 @@ def package_relationship_update(
     return _update_package_relationship(entity, comment, context)
 
 
-def _group_or_org_update(
-        context: Context, data_dict: DataDict, is_org: bool = False):
+def _group_or_org_update(context, data_dict, is_org=False):
     model = context['model']
+    user = context['user']
     session = context['session']
     id = _get_or_bust(data_dict, 'id')
 
     group = model.Group.get(id)
+    context["group"] = group
     if group is None:
         raise NotFound('Group was not found.')
-    context["group"] = group
 
-    data_dict_type = data_dict.get('type')
-    if data_dict_type is None:
-        data_dict['type'] = group.type
-    else:
-        if data_dict_type != group.type:
-            raise ValidationError({"message": "Type cannot be updated"})
+    data_dict['type'] = group.type
 
     # get the schema
     group_plugin = lib_plugins.lookup_group_plugin(group.type)
-
-    if context.get("schema"):
-        schema: Schema = context["schema"]
-    elif hasattr(group_plugin, "update_group_schema"):
-        schema: Schema = group_plugin.update_group_schema()
-    # TODO: remove these fallback deprecated methods in the next release
-    elif hasattr(group_plugin, "form_to_db_schema_options"):
-        schema: Schema = getattr(group_plugin, "form_to_db_schema_options")({
-            'type': 'update', 'api': 'api_version' in context,
-            'context': context})
-    else:
-        schema: Schema = group_plugin.form_to_db_schema()
+    try:
+        schema = group_plugin.form_to_db_schema_options({'type': 'update',
+                                               'api': 'api_version' in context,
+                                               'context': context})
+    except AttributeError:
+        schema = group_plugin.form_to_db_schema()
 
     upload = uploader.get_uploader('group')
     upload.update_data_dict(data_dict, 'image_url',
@@ -684,13 +673,20 @@ def _group_or_org_update(
     else:
         _check_access('group_update', context, data_dict)
 
+    if 'api_version' not in context:
+        # old plugins do not support passing the schema so we need
+        # to ensure they still work
+        try:
+            group_plugin.check_data_dict(data_dict, schema)
+        except TypeError:
+            group_plugin.check_data_dict(data_dict)
+
     data, errors = lib_plugins.plugin_validate(
         group_plugin, context, data_dict, schema,
         'organization_update' if is_org else 'group_update')
-
-    group = context.get('group')
     log.debug('group_update validate_errs=%r user=%s group=%s data_dict=%r',
-              errors, context.get('user'), group.name if group else '',
+              errors, context.get('user'),
+              context.get('group').name if context.get('group') else '',
               data_dict)
 
     if errors:
@@ -712,6 +708,46 @@ def _group_or_org_update(
     for item in plugins.PluginImplementations(plugin_type):
         item.edit(group)
 
+    if is_org:
+        activity_type = 'changed organization'
+    else:
+        activity_type = 'changed group'
+
+    activity_dict = {
+            'user_id': model.User.by_name(six.ensure_text(user)).id,
+            'object_id': group.id,
+            'activity_type': activity_type,
+            }
+    # Handle 'deleted' groups.
+    # When the user marks a group as deleted this comes through here as
+    # a 'changed' group activity. We detect this and change it to a 'deleted'
+    # activity.
+    if group.state == u'deleted':
+        if session.query(ckan.model.Activity).filter_by(
+                object_id=group.id, activity_type='deleted').all():
+            # A 'deleted group' activity for this group has already been
+            # emitted.
+            # FIXME: What if the group was deleted and then activated again?
+            activity_dict = None
+        else:
+            # We will emit a 'deleted group' activity.
+            activity_dict['activity_type'] = \
+                'deleted organization' if is_org else 'deleted group'
+    if activity_dict is not None:
+        activity_dict['data'] = {
+                'group': dictization.table_dictize(group, context)
+                }
+        activity_create_context = {
+            'model': model,
+            'user': user,
+            'defer_commit': True,
+            'ignore_auth': True,
+            'session': session
+        }
+        _get_action('activity_create')(activity_create_context, activity_dict)
+        # TODO: Also create an activity detail recording what exactly changed
+        # in the group.
+
     upload.upload(uploader.get_max_image_size())
 
     if not context.get('defer_commit'):
@@ -720,7 +756,7 @@ def _group_or_org_update(
     return model_dictize.group_dictize(group, context)
 
 
-def group_update(context: Context, data_dict: DataDict) -> ActionResult.GroupUpdate:
+def group_update(context, data_dict):
     '''Update a group.
 
     You must be authorized to edit the group.
@@ -748,8 +784,7 @@ def group_update(context: Context, data_dict: DataDict) -> ActionResult.GroupUpd
     # values. This includes: packages, users, groups, tags, extras
     return _group_or_org_update(context, data_dict)
 
-def organization_update(
-        context: Context, data_dict: DataDict) -> ActionResult.OrganizationUpdate:
+def organization_update(context, data_dict):
     '''Update a organization.
 
     You must be authorized to edit the organization.
@@ -776,11 +811,11 @@ def organization_update(
     # values. This includes: users, groups, tags, extras
     return _group_or_org_update(context, data_dict, is_org=True)
 
-def user_update(context: Context, data_dict: DataDict) -> ActionResult.UserUpdate:
+def user_update(context, data_dict):
     '''Update a user account.
 
     Normal users can only update their own user accounts. Sysadmins can update
-    any user account and modify existing usernames.
+    any user account. Can not modify exisiting user's name.
 
     .. note:: Update methods may delete parameters not explicitly provided in the
         data_dict. If you want to edit only a specific attribute use `user_patch`
@@ -797,15 +832,15 @@ def user_update(context: Context, data_dict: DataDict) -> ActionResult.UserUpdat
 
     '''
     model = context['model']
-    user = context['user']
+    user = author = context['user']
     session = context['session']
     schema = context.get('schema') or schema_.default_update_user_schema()
     id = _get_or_bust(data_dict, 'id')
 
     user_obj = model.User.get(id)
+    context['user_obj'] = user_obj
     if user_obj is None:
         raise NotFound('User was not found.')
-    context['user_obj'] = user_obj
 
     _check_access('user_update', context, data_dict)
 
@@ -824,11 +859,26 @@ def user_update(context: Context, data_dict: DataDict) -> ActionResult.UserUpdat
 
     user = model_save.user_dict_save(data, context)
 
+    activity_dict = {
+            'user_id': user.id,
+            'object_id': user.id,
+            'activity_type': 'changed user',
+            }
+    activity_create_context = {
+        'model': model,
+        'user': author,
+        'defer_commit': True,
+        'ignore_auth': True,
+        'session': session
+    }
+    _get_action('activity_create')(activity_create_context, activity_dict)
+    # TODO: Also create an activity detail recording what exactly changed in
+    # the user.
+
     upload.upload(uploader.get_max_image_size())
 
     if not context.get('defer_commit'):
-        with logic.guard_against_duplicated_email(data_dict['email']):
-            model.repo.commit()
+        model.repo.commit()
 
     author_obj = model.User.get(context.get('user'))
     include_plugin_extras = False
@@ -840,8 +890,38 @@ def user_update(context: Context, data_dict: DataDict) -> ActionResult.UserUpdat
     return user_dict
 
 
-def task_status_update(
-        context: Context, data_dict: DataDict) -> ActionResult.TaskStatusUpdate:
+def user_generate_apikey(context, data_dict):
+    '''Cycle a user's API key
+
+    :param id: the name or id of the user whose key needs to be updated
+    :type id: string
+
+    :returns: the updated user
+    :rtype: dictionary
+    '''
+    model = context['model']
+    schema = context.get('schema') or schema_.default_generate_apikey_user_schema()
+    context['schema'] = schema
+    # check if user id in data_dict
+    id = _get_or_bust(data_dict, 'id')
+
+    # check if user exists
+    user_obj = model.User.get(id)
+    context['user_obj'] = user_obj
+    if user_obj is None:
+        raise NotFound('User was not found.')
+
+    # check permission
+    _check_access('user_generate_apikey', context, data_dict)
+
+    # change key
+    old_data = _get_action('user_show')(context, data_dict)
+    old_data['apikey'] = model.types.make_uuid()
+    data_dict = old_data
+    return _get_action('user_update')(context, data_dict)
+
+
+def task_status_update(context, data_dict):
     '''Update a task status.
 
     :param id: the id of the task status to update
@@ -875,9 +955,10 @@ def task_status_update(
 
     if id:
         task_status = model.TaskStatus.get(id)
+        context["task_status"] = task_status
+
         if task_status is None:
             raise NotFound(_('TaskStatus was not found.'))
-        context["task_status"] = task_status
 
     _check_access('task_status_update', context, data_dict)
 
@@ -892,8 +973,7 @@ def task_status_update(
     session.close()
     return model_dictize.task_status_dictize(task_status, context)
 
-def task_status_update_many(
-        context: Context, data_dict: DataDict) -> ActionResult.TaskStatusUpdateMany:
+def task_status_update_many(context, data_dict):
     '''Update many task statuses at once.
 
     :param data: the task_status dictionaries to update, for the format of task
@@ -909,7 +989,6 @@ def task_status_update_many(
     model = context['model']
     deferred = context.get('defer_commit')
     context['defer_commit'] = True
-
     for data in data_dict['data']:
         results.append(_get_action('task_status_update')(context, data))
     if not deferred:
@@ -918,8 +997,7 @@ def task_status_update_many(
         model.Session.commit()
     return {'results': results}
 
-def term_translation_update(
-        context: Context, data_dict: DataDict) -> ActionResult.TermTranslationUpdate:
+def term_translation_update(context, data_dict):
     '''Create or update a term translation.
 
     You must be a sysadmin to create or update term translations.
@@ -941,10 +1019,9 @@ def term_translation_update(
 
     _check_access('term_translation_update', context, data_dict)
 
-    schema = {'term': [validators.not_empty, validators.unicode_safe],
-              'term_translation': [
-                  validators.not_empty, validators.unicode_safe],
-              'lang_code': [validators.not_empty, validators.unicode_safe]}
+    schema = {'term': [validators.not_empty, text_type],
+              'term_translation': [validators.not_empty, text_type],
+              'lang_code': [validators.not_empty, text_type]}
 
     data, errors = _validate(data_dict, schema, context)
     if errors:
@@ -954,8 +1031,8 @@ def term_translation_update(
     trans_table = model.term_translation_table
 
     update = trans_table.update()
-    update = update.where(trans_table.c["term"] == data['term'])
-    update = update.where(trans_table.c["lang_code"] == data['lang_code'])
+    update = update.where(trans_table.c.term == data['term'])
+    update = update.where(trans_table.c.lang_code == data['lang_code'])
     update = update.values(term_translation = data['term_translation'])
 
     conn = model.Session.connection()
@@ -970,8 +1047,7 @@ def term_translation_update(
 
     return data
 
-def term_translation_update_many(
-        context: Context, data_dict: DataDict) -> ActionResult.TermTranslationUpdateMany:
+def term_translation_update_many(context, data_dict):
     '''Create or update many term translations at once.
 
     :param data: the term translation dictionaries to create or update,
@@ -995,7 +1071,6 @@ def term_translation_update_many(
     context['defer_commit'] = True
 
     action = _get_action('term_translation_update')
-    num = 0
     for num, row in enumerate(data_dict['data']):
         action(context, row)
 
@@ -1004,7 +1079,7 @@ def term_translation_update_many(
     return {'success': '%s rows updated' % (num + 1)}
 
 
-def vocabulary_update(context: Context, data_dict: DataDict) -> ActionResult.VocabularyUpdate:
+def vocabulary_update(context, data_dict):
     '''Update a tag vocabulary.
 
     You must be a sysadmin to update vocabularies.
@@ -1025,7 +1100,7 @@ def vocabulary_update(context: Context, data_dict: DataDict) -> ActionResult.Voc
     if not vocab_id:
         raise ValidationError({'id': _('id not in data')})
 
-    vocab = model.Vocabulary.get(vocab_id)
+    vocab = model.vocabulary.Vocabulary.get(vocab_id)
     if vocab is None:
         raise NotFound(_('Could not find vocabulary "%s"') % vocab_id)
 
@@ -1050,7 +1125,47 @@ def vocabulary_update(context: Context, data_dict: DataDict) -> ActionResult.Voc
     return model_dictize.vocabulary_dictize(updated_vocab, context)
 
 
-def package_owner_org_update(context: Context, data_dict: DataDict) -> ActionResult.PackageOwnerOrgUpdate:
+def dashboard_mark_activities_old(context, data_dict):
+    '''Mark all the authorized user's new dashboard activities as old.
+
+    This will reset
+    :py:func:`~ckan.logic.action.get.dashboard_new_activities_count` to 0.
+
+    '''
+    _check_access('dashboard_mark_activities_old', context,
+            data_dict)
+    model = context['model']
+    user_id = model.User.get(context['user']).id
+    model.Dashboard.get(user_id).activity_stream_last_viewed = (
+            datetime.datetime.utcnow())
+    if not context.get('defer_commit'):
+        model.repo.commit()
+
+
+@logic.auth_audit_exempt
+def send_email_notifications(context, data_dict):
+    '''Send any pending activity stream notification emails to users.
+
+    You must provide a sysadmin's API key in the Authorization header of the
+    request, or call this action from the command-line via a `paster post ...`
+    command.
+
+    '''
+    # If paste.command_request is True then this function has been called
+    # by a `paster post ...` command not a real HTTP request, so skip the
+    # authorization.
+    if not request.environ.get('paste.command_request'):
+        _check_access('send_email_notifications', context, data_dict)
+
+    if not converters.asbool(
+            config.get('ckan.activity_streams_email_notifications')):
+        raise ValidationError('ckan.activity_streams_email_notifications'
+                              ' is not enabled in config')
+
+    email_notifications.get_and_send_notifications_for_all_users()
+
+
+def package_owner_org_update(context, data_dict):
     '''Update the owning organization of a dataset
 
     :param id: the name or id of the dataset to update
@@ -1060,7 +1175,7 @@ def package_owner_org_update(context: Context, data_dict: DataDict) -> ActionRes
     :type organization_id: string
     '''
     model = context['model']
-    name_or_id = data_dict.get('id', '')
+    name_or_id = data_dict.get('id')
     organization_id = data_dict.get('organization_id')
 
     _check_access('package_owner_org_update', context, data_dict)
@@ -1105,8 +1220,7 @@ def package_owner_org_update(context: Context, data_dict: DataDict) -> ActionRes
         model.Session.commit()
 
 
-def _bulk_update_dataset(
-        context: Context, data_dict: DataDict, update_dict: dict[str, Any]):
+def _bulk_update_dataset(context, data_dict, update_dict):
     ''' Bulk update shared code for organizations'''
 
     datasets = data_dict.get('datasets', [])
@@ -1114,11 +1228,21 @@ def _bulk_update_dataset(
 
     model = context['model']
     model.Session.query(model.package_table) \
-        .filter(
-            model.Package.id.in_(datasets)
-        ) .filter(model.Package.owner_org == org_id) \
+        .filter(model.Package.id.in_(datasets)) \
+        .filter(model.Package.owner_org == org_id) \
         .update(update_dict, synchronize_session=False)
 
+    # Handle Activity Stream for Bulk Operations
+    user = context['user']
+    user_obj = model.User.by_name(user)
+    if user_obj:
+        user_id = user_obj.id
+    else:
+        user_id = 'not logged in'
+    for dataset in datasets:
+        entity = model.Package.get(dataset)
+        activity = entity.activity_stream_item('changed', user_id)
+        model.Session.add(activity)
     model.Session.commit()
 
     # solr update here
@@ -1127,10 +1251,10 @@ def _bulk_update_dataset(
     # update the solr index in batches
     BATCH_SIZE = 50
 
-    def process_solr(q: str):
+    def process_solr(q):
         # update the solr index for the query
         query = search.PackageSearchQuery()
-        q_dict = {
+        q = {
             'q': q,
             'fl': 'data_dict',
             'wt': 'json',
@@ -1138,7 +1262,7 @@ def _bulk_update_dataset(
             'rows': BATCH_SIZE
         }
 
-        for result in query.run(q_dict)['results']:
+        for result in query.run(q)['results']:
             data_dict = json.loads(result['data_dict'])
             if data_dict['owner_org'] == org_id:
                 data_dict.update(update_dict)
@@ -1158,48 +1282,47 @@ def _bulk_update_dataset(
     psi.commit()
 
 
-def bulk_update_private(context: Context, data_dict: DataDict) -> ActionResult.BulkUpdatePrivate:
+def bulk_update_private(context, data_dict):
     ''' Make a list of datasets private
 
     :param datasets: list of ids of the datasets to update
     :type datasets: list of strings
 
     :param org_id: id of the owning organization
-    :type org_id: string
+    :type org_id: int
     '''
 
     _check_access('bulk_update_private', context, data_dict)
     _bulk_update_dataset(context, data_dict, {'private': True})
 
-def bulk_update_public(context: Context, data_dict: DataDict) -> ActionResult.BulkUpdatePublic:
+def bulk_update_public(context, data_dict):
     ''' Make a list of datasets public
 
     :param datasets: list of ids of the datasets to update
     :type datasets: list of strings
 
     :param org_id: id of the owning organization
-    :type org_id: string
+    :type org_id: int
     '''
 
     _check_access('bulk_update_public', context, data_dict)
     _bulk_update_dataset(context, data_dict, {'private': False})
 
-def bulk_update_delete(context: Context, data_dict: DataDict) -> ActionResult.BulkUpdateDelete:
+def bulk_update_delete(context, data_dict):
     ''' Make a list of datasets deleted
 
     :param datasets: list of ids of the datasets to update
     :type datasets: list of strings
 
     :param org_id: id of the owning organization
-    :type org_id: string
+    :type org_id: int
     '''
 
     _check_access('bulk_update_delete', context, data_dict)
     _bulk_update_dataset(context, data_dict, {'state': 'deleted'})
 
 
-def config_option_update(
-        context: Context, data_dict: DataDict) -> ActionResult.ConfigOptionUpdate:
+def config_option_update(context, data_dict):
     '''
 
     .. versionadded:: 2.4
@@ -1222,6 +1345,7 @@ def config_option_update(
 
         get_action('config_option_update)({}, {
             'ckan.site_title': 'My Open Data site',
+            'ckan.homepage_layout': 2,
         })
 
     :param key: a configuration option key (eg ``ckan.site_title``). It must
@@ -1259,7 +1383,7 @@ def config_option_update(
         msg = 'Configuration option(s) \'{0}\' can not be updated'.format(
               ' '.join(list(unsupported_options)))
 
-        raise ValidationError({'message': msg})
+        raise ValidationError(msg, error_summary={'message': msg})
 
     upload = uploader.get_uploader('admin')
     upload.update_data_dict(data_dict, 'ckan.site_logo',
@@ -1270,7 +1394,7 @@ def config_option_update(
         model.Session.rollback()
         raise ValidationError(errors)
 
-    for key, value in data.items():
+    for key, value in six.iteritems(data):
 
         # Set full Logo url
         if key == 'ckan.site_logo' and value and not value.startswith('http')\

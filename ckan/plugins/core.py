@@ -1,24 +1,22 @@
+# encoding: utf-8
+
 '''
 Provides plugin services to the CKAN
 '''
-from __future__ import annotations
 
-import logging
 from contextlib import contextmanager
-from typing import Generic, Iterator, TypeVar
-from typing_extensions import TypeGuard
+import logging
 from pkg_resources import iter_entry_points
+from pyutilib.component.core import PluginGlobals, implements
+from pyutilib.component.core import ExtensionPoint
+from pyutilib.component.core import SingletonPlugin as _pca_SingletonPlugin
+from pyutilib.component.core import Plugin as _pca_Plugin
+from ckan.common import asbool
+from six import string_types
 
+from ckan.plugins import interfaces
 
-from ckan.common import config, aslist
-from ckan.types import SignalMapping
-
-from . import interfaces
-from .base import (
-    Interface, Plugin,
-    SingletonPlugin, PluginNotFoundException,
-    implements,
-)
+from ckan.common import config
 
 
 __all__ = [
@@ -27,10 +25,7 @@ __all__ = [
     'load', 'load_all', 'unload', 'unload_all',
     'get_plugin', 'plugins_update',
     'use_plugin', 'plugin_loaded',
-    'unload_non_system_plugins',
 ]
-
-TInterface = TypeVar('TInterface', bound="Interface")
 
 log = logging.getLogger(__name__)
 
@@ -50,23 +45,15 @@ GROUPS = [
     TEST_PLUGINS_ENTRY_POINT_GROUP,
 ]
 # These lists are used to ensure that the correct extensions are enabled.
-_PLUGINS: list[str] = []
+_PLUGINS = []
+_PLUGINS_CLASS = []
 
 # To aid retrieving extensions by name
-_PLUGINS_SERVICE: dict[str, Plugin] = {}
-
-
-def implemented_by(
-        service: Plugin,
-        interface: type[TInterface]
-) -> TypeGuard[TInterface]:
-    return interface.provided_by(service)
+_PLUGINS_SERVICE = {}
 
 
 @contextmanager
-def use_plugin(
-    *plugins: str
-) -> Iterator[Plugin | list[Plugin]]:
+def use_plugin(*plugins):
     '''Load plugin(s) for testing purposes
 
     e.g.
@@ -84,24 +71,22 @@ def use_plugin(
         unload(*plugins)
 
 
-class PluginImplementations(Generic[TInterface]):
-    def __init__(self, interface: type[TInterface]):
-        self.interface = interface
+class PluginImplementations(ExtensionPoint):
 
-    def extensions(self):
-        return [
-            p for p in _PLUGINS_SERVICE.values()
-            if self.interface.implemented_by(type(p))
-        ]
+    def __iter__(self):
+        '''
+        When we upgraded pyutilib on CKAN 2.9 the order in which
+        plugins were returned by `PluginImplementations` changed
+        so we use this wrapper to maintain the previous order
+        (which is the same as the ckan.plugins config option)
+        '''
 
-    def __iter__(self) -> Iterator[TInterface]:
-        plugin_lookup = {pf.name: pf for pf in self.extensions()}
-        plugins = config.get("ckan.plugins", [])
-        if isinstance(plugins, str):
-            # this happens when core declarations loaded and validated
-            plugins = plugins.split()
+        iterator = super(PluginImplementations, self).__iter__()
 
-        plugins_in_config = plugins + find_system_plugins()
+        plugin_lookup = {pf.name: pf for pf in iterator}
+
+        plugins_in_config = (
+            config.get('ckan.plugins', '').split() + find_system_plugins())
 
         ordered_plugins = []
         for pc in plugins_in_config:
@@ -114,43 +99,73 @@ class PluginImplementations(Generic[TInterface]):
             # add to the end of the iterator
             ordered_plugins.extend(plugin_lookup.values())
 
-        if self.interface._reverse_iteration_order:
-            ordered_plugins = list(reversed(ordered_plugins))
-
         return iter(ordered_plugins)
 
 
-def get_plugin(plugin: str) -> Plugin | None:
+class PluginNotFoundException(Exception):
+    '''
+    Raised when a requested plugin cannot be found.
+    '''
+
+
+class Plugin(_pca_Plugin):
+    '''
+    Base class for plugins which require multiple instances.
+
+    Unless you need multiple instances of your plugin object you should
+    probably use SingletonPlugin.
+    '''
+
+
+class SingletonPlugin(_pca_SingletonPlugin):
+    '''
+    Base class for plugins which are singletons (ie most of them)
+
+    One singleton instance of this class will be created when the plugin is
+    loaded. Subsequent calls to the class constructor will always return the
+    same singleton instance.
+    '''
+
+
+def get_plugin(plugin):
     ''' Get an instance of a active plugin by name.  This is helpful for
     testing. '''
     if plugin in _PLUGINS_SERVICE:
         return _PLUGINS_SERVICE[plugin]
-    return None
 
 
-def plugins_update() -> None:
+def plugins_update():
     ''' This is run when plugins have been loaded or unloaded and allows us
     to run any specific code to ensure that the new plugin setting are
     correctly setup '''
+
+    # It is posible for extra SingletonPlugin extensions to be activated if
+    # the file containing them is imported, for example if two or more
+    # extensions are defined in the same file.  Therefore we do a sanity
+    # check and disable any that should not be active.
+    for env in PluginGlobals.env.values():
+        for service, id_ in env.singleton_services.items():
+            if service not in _PLUGINS_CLASS:
+                PluginGlobals.plugin_instances[id_].deactivate()
+
+    # Reset CKAN to reflect the currently enabled extensions.
     import ckan.config.environment as environment
     environment.update_config()
 
 
-def load_all() -> None:
+def load_all():
     '''
     Load all plugins listed in the 'ckan.plugins' config directive.
     '''
     # Clear any loaded plugins
     unload_all()
 
-    plugins = aslist(config.get('ckan.plugins')) + find_system_plugins()
+    plugins = config.get('ckan.plugins', '').split() + find_system_plugins()
 
     load(*plugins)
 
 
-def load(
-        *plugins: str
-) -> Plugin | list[Plugin]:
+def load(*plugins):
     '''
     Load named plugin(s).
     '''
@@ -164,20 +179,18 @@ def load(
         service = _get_service(plugin)
         for observer_plugin in observers:
             observer_plugin.before_load(service)
-
-        _PLUGINS_SERVICE[plugin] = service
-
+        service.activate()
         for observer_plugin in observers:
             observer_plugin.after_load(service)
 
         _PLUGINS.append(plugin)
+        _PLUGINS_CLASS.append(service.__class__)
 
-        if implemented_by(service, interfaces.ISignal):
-            _connect_signals(service.get_signal_subscriptions())
+        if isinstance(service, SingletonPlugin):
+            _PLUGINS_SERVICE[plugin] = service
+
         output.append(service)
-
-    if plugins:
-        plugins_update()
+    plugins_update()
 
     # Return extension instance if only one was loaded.  If more that one
     # has been requested then a list of instances is returned in the order
@@ -187,7 +200,7 @@ def load(
     return output
 
 
-def unload_all() -> None:
+def unload_all():
     '''
     Unload (deactivate) all loaded plugins in the reverse order that they
     were loaded.
@@ -195,36 +208,35 @@ def unload_all() -> None:
     unload(*reversed(_PLUGINS))
 
 
-def unload(*plugins: str) -> None:
+def unload(*plugins):
     '''
     Unload named plugin(s).
     '''
+
     observers = PluginImplementations(interfaces.IPluginObserver)
 
     for plugin in plugins:
         if plugin in _PLUGINS:
             _PLUGINS.remove(plugin)
+            if plugin in _PLUGINS_SERVICE:
+                del _PLUGINS_SERVICE[plugin]
         else:
             raise Exception('Cannot unload plugin `%s`' % plugin)
+
         service = _get_service(plugin)
-
-        if plugin in _PLUGINS_SERVICE:
-            del _PLUGINS_SERVICE[plugin]
-
         for observer_plugin in observers:
             observer_plugin.before_unload(service)
 
+        service.deactivate()
+
+        _PLUGINS_CLASS.remove(service.__class__)
+
         for observer_plugin in observers:
             observer_plugin.after_unload(service)
-
-        if implemented_by(service, interfaces.ISignal):
-            _disconnect_signals(service.get_signal_subscriptions())
-
-    if plugins:
-        plugins_update()
+    plugins_update()
 
 
-def plugin_loaded(name: str) -> bool:
+def plugin_loaded(name):
     '''
     See if a particular plugin is loaded.
     '''
@@ -233,7 +245,7 @@ def plugin_loaded(name: str) -> bool:
     return False
 
 
-def find_system_plugins() -> list[str]:
+def find_system_plugins():
     '''
     Return all plugins in the ckan.system_plugins entry point group.
 
@@ -248,56 +260,25 @@ def find_system_plugins() -> list[str]:
     return eps
 
 
-def unload_non_system_plugins():
-    """Unload all plugins except for system plugins.
+def _get_service(plugin_name):
+    '''
+    Return a service (ie an instance of a plugin class).
 
-    System plugins must remain available because they provide essential CKAN
-    functionality.
+    :param plugin_name: the name of a plugin entry point
+    :type plugin_name: string
 
-    At the moment we have only one system plugin - synchronous_search - which
-    automatically sends all datasets to Solr after modifications. Without it
-    you have to indexed datasets manually after any `package_*` action.
+    :return: the service object
+    '''
 
-    """
-    system_plugins = find_system_plugins()
-    plugins_to_unload = [
-        p for p in reversed(_PLUGINS)
-        if p not in system_plugins
-    ]
-    unload(*plugins_to_unload)
-
-
-def _get_service(plugin_name: str) -> Plugin:
-    """Return a plugin instance using its entry point name.
-
-    Example:
-    >>> plugin = _get_service("activity")
-    >>> assert isinstance(plugin, ActivityPlugin)
-    """
-    for group in GROUPS:
-        iterator = iter_entry_points(
-            group=group,
-            name=plugin_name
-        )
-        plugin = next(iterator, None)
-        if plugin:
-            return plugin.load()(name=plugin_name)
-    raise PluginNotFoundException(plugin_name)
-
-
-def _connect_signals(mapping: SignalMapping):
-    for signal, listeners in mapping.items():
-        for options in listeners:
-            if not isinstance(options, dict):
-                options = {'receiver': options}
-            signal.connect(**options)
-
-
-def _disconnect_signals(mapping: SignalMapping):
-    for signal, listeners in mapping.items():
-        for options in listeners:
-            if isinstance(options, dict):
-                options.pop('weak', None)
-            else:
-                options = {'receiver': options}
-            signal.disconnect(**options)
+    if isinstance(plugin_name, string_types):
+        for group in GROUPS:
+            iterator = iter_entry_points(
+                group=group,
+                name=plugin_name
+            )
+            plugin = next(iterator, None)
+            if plugin:
+                return plugin.load()(name=plugin_name)
+        raise PluginNotFoundException(plugin_name)
+    else:
+        raise TypeError('Expected a plugin name', plugin_name)

@@ -1,9 +1,8 @@
-# type: ignore
-from __future__ import annotations
+# -*- coding: utf-8 -*-
 
 import logging
-from typing import Any
-import sqlalchemy as sa
+from sqlalchemy import create_engine
+from six.moves import map
 
 from ckanext.datastore.backend import DatastoreBackend
 
@@ -15,22 +14,23 @@ class DatastoreExampleSqliteBackend(DatastoreBackend):
     def __init__(self):
         self._engine = None
 
-    def execute(self, sql: str, params: dict[str, Any] | None = None):
-        with self._get_engine().begin() as conn:
-            return conn.execute(sa.text(sql), params)
-
     def _get_engine(self):
         if not self._engine:
-            self._engine = sa.create_engine(self.write_url)
+            self._engine = create_engine(self.write_url)
         return self._engine
 
     def _insert_records(self, table, records):
         if len(records):
             for record in records:
-                sql = sa.insert(
-                    sa.table(table, *map(sa.column, record))
-                ).values(record)
-                self.execute(sql)
+                self._get_engine().execute(
+                    u'INSERT INTO "{0}"({1}) VALUES({2})'.format(
+                        table,
+                        u', '.join(record.keys()),
+                        u', '.join(['?'] * len(record.keys()))
+                    ),
+                    list(record.values())
+                )
+            pass
 
     def configure(self, config):
         self.write_url = config.get(
@@ -39,16 +39,15 @@ class DatastoreExampleSqliteBackend(DatastoreBackend):
 
         return config
 
-    def create(self, context, data_dict, plugin_data):
+    def create(self, context, data_dict):
         columns = str(u', '.join(
-            [str(sa.column(e['id'])) + " text" for e in data_dict['fields']]))
-
-        self.execute(sa.text(
-            'CREATE TABLE IF NOT EXISTS "{name}"({columns});'.format(
-                name=sa.table(data_dict['resource_id']),
+            [e['id'] + u' text' for e in data_dict['fields']]))
+        engine = self._get_engine()
+        engine.execute(
+            u' CREATE TABLE IF NOT EXISTS "{name}"({columns});'.format(
+                name=data_dict['resource_id'],
                 columns=columns
-            )
-        ))
+            ))
         self._insert_records(data_dict['resource_id'], data_dict['records'])
         return data_dict
 
@@ -56,13 +55,15 @@ class DatastoreExampleSqliteBackend(DatastoreBackend):
         raise NotImplementedError()
 
     def delete(self, context, data_dict):
-        self.execute('DROP TABLE IF EXISTS "{0}"'.format(
+        engine = self._get_engine()
+        engine.execute(u'DROP TABLE IF EXISTS "{0}"'.format(
             data_dict['resource_id']
         ))
         return data_dict
 
     def search(self, context, data_dict):
-        result = self.execute('SELECT * FROM "{0}" LIMIT {1}'.format(
+        engine = self._get_engine()
+        result = engine.execute(u'SELECT * FROM "{0}" LIMIT {1}'.format(
             data_dict['resource_id'],
             data_dict.get(u'limit', 10)
         ))
@@ -90,15 +91,17 @@ class DatastoreExampleSqliteBackend(DatastoreBackend):
         pass
 
     def resource_exists(self, id):
-        return self.execute(
-            'select name from sqlite_master where ' +
-            f'type = "table" and name = "{id}"'
+        return self._get_engine().execute(
+            u'''
+            select name from sqlite_master
+            where type = "table" and name = "{0}"'''.format(
+                id)
         ).fetchone()
 
     def resource_fields(self, id):
-        info = self.execute(
-            'PRAGMA table_info("{0}")'.format(id)
-        ).fetchall()
+        engine = self._get_engine()
+        info = engine.execute(
+            u'PRAGMA table_info("{0}")'.format(id)).fetchall()
 
         schema = {}
         for col in info:
@@ -111,7 +114,8 @@ class DatastoreExampleSqliteBackend(DatastoreBackend):
         return False, alias
 
     def get_all_ids(self):
-        return [t.name for t in self.execute(
-            '''select name from sqlite_master
+        return [t.name for t in self._get_engine().execute(
+            u'''
+            select name from sqlite_master
             where type = "table"'''
         ).fetchall()]

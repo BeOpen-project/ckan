@@ -1,15 +1,11 @@
 # encoding: utf-8
-from __future__ import annotations
 
-from typing import Any
-
+from six import text_type
 import ckan.plugins as p
-from ckan.types import Context, DataDict
-from ckan.common import CKANConfig
-from ckan.config.declaration import Declaration, Key
 
 ignore_empty = p.toolkit.get_validator('ignore_empty')
-unicode_safe = p.toolkit.get_validator('unicode_safe')
+
+DEFAULT_AUDIO_FORMATS = 'wav ogg mp3'
 
 
 class AudioView(p.SingletonPlugin):
@@ -17,34 +13,29 @@ class AudioView(p.SingletonPlugin):
 
     p.implements(p.IConfigurer, inherit=True)
     p.implements(p.IResourceView, inherit=True)
-    p.implements(p.IConfigDeclaration)
 
-    def update_config(self, config: CKANConfig):
+    def update_config(self, config):
         p.toolkit.add_template_directory(config, 'theme/templates')
-        self.formats = config.get('ckan.preview.audio_formats').split()
+        self.formats = config.get(
+            'ckan.preview.audio_formats',
+            DEFAULT_AUDIO_FORMATS).split()
 
-    def info(self) -> dict[str, Any]:
+    def info(self):
         return {'name': 'audio_view',
                 'title': p.toolkit._('Audio'),
-                'icon': 'file-audio',
-                'schema': {'audio_url': [ignore_empty, unicode_safe]},
+                'icon': 'file-audio-o',
+                'schema': {'audio_url': [ignore_empty, text_type]},
                 'iframed': False,
                 'always_available': True,
                 'default_title': p.toolkit._('Audio'),
                 }
 
-    def can_view(self, data_dict: DataDict) -> bool:
+    def can_view(self, data_dict):
         return (data_dict['resource'].get('format', '').lower()
                 in self.formats)
 
-    def view_template(self, context: Context, data_dict: DataDict) -> str:
+    def view_template(self, context, data_dict):
         return 'audio_view.html'
 
-    def form_template(self, context: Context, data_dict: DataDict) -> str:
+    def form_template(self, context, data_dict):
         return 'audio_form.html'
-
-    # IConfigDeclaration
-
-    def declare_config_options(self, declaration: Declaration, key: Key):
-        declaration.annotate("audio_view settings")
-        declaration.declare(key.ckan.preview.audio_formats, "wav ogg mp3")

@@ -1,21 +1,17 @@
 # encoding: utf-8
 
-from ckan.types import AuthResult, Context, ContextValidator, DataDict
-from typing import Optional, cast
 import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
 
-def group_create(
-        context: Context, data_dict: Optional[DataDict] = None) -> AuthResult:
+def group_create(context, data_dict=None):
     # Get the user name of the logged-in user.
     user_name = context['user']
 
     # Get a list of the members of the 'curators' group.
     try:
         members = toolkit.get_action('member_list')(
-            {},
-            {'id': 'curators', 'object_type': 'user'})
+            data_dict={'id': 'curators', 'object_type': 'user'})
     except toolkit.ObjectNotFound:
         # The curators group doesn't exist.
         return {'success': False,
@@ -27,9 +23,8 @@ def group_create(
     member_ids = [member_tuple[0] for member_tuple in members]
 
     # We have the logged-in user's user name, get their user id.
-    convert_user_name_or_id_to_id = cast(
-        ContextValidator,
-        toolkit.get_converter('convert_user_name_or_id_to_id'))
+    convert_user_name_or_id_to_id = toolkit.get_converter(
+        'convert_user_name_or_id_to_id')
     try:
         user_id = convert_user_name_or_id_to_id(user_name, context)
     except toolkit.Invalid:

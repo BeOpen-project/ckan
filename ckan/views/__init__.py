@@ -1,49 +1,103 @@
 # encoding: utf-8
-from __future__ import annotations
 
-from typing import Any, Optional
-
-from urllib.parse import quote
-from flask.wrappers import Response
+from sqlalchemy import inspect
+from ckan.common import asbool
+import six
+from six import text_type
+from six.moves.urllib.parse import quote
+from werkzeug.utils import import_string, cached_property
 
 import ckan.model as model
 import ckan.lib.api_token as api_token
-from ckan.common import g, request, config, current_user, logout_user
+from ckan.common import g, request, config, session
+from ckan.lib.helpers import redirect_to as redirect
 from ckan.lib.i18n import get_locales_from_config
 import ckan.plugins as p
 
 import logging
 log = logging.getLogger(__name__)
 
+APIKEY_HEADER_NAME_KEY = u'apikey_header_name'
+APIKEY_HEADER_NAME_DEFAULT = u'X-CKAN-API-Key'
 
-def set_cors_headers_for_response(response: Response) -> Response:
+
+class LazyView(object):
+
+    def __init__(self, import_name, view_name=None):
+        self.__module__, self.__name__ = import_name.rsplit(u'.', 1)
+        self.import_name = import_name
+        self.view_name = view_name
+
+    @cached_property
+    def view(self):
+        actual_view = import_string(self.import_name)
+        if self.view_name:
+            actual_view = actual_view.as_view(self.view_name)
+        return actual_view
+
+    def __call__(self, *args, **kwargs):
+        return self.view(*args, **kwargs)
+
+
+def check_session_cookie(response):
     u'''
-    Set up Access Control Allow headers if either origin_allow_all is True, or
-    the request Origin is in the origin_whitelist.
+    The cookies for auth (auth_tkt) and session (ckan) are separate. This
+    checks whether a user is logged in, and determines the validity of the
+    session cookie, removing it if necessary.
     '''
-    if request.headers.get(u'Origin'):
-        cors_origin_allowed = None
-        allow_all = config.get(u'ckan.cors.origin_allow_all')
-        whitelisted = request.headers.get(u'Origin') in config.get(
-            u'ckan.cors.origin_whitelist')
-        if allow_all:
-            cors_origin_allowed = '*'
-        elif whitelisted:
-            # set var to the origin to allow it.
-            cors_origin_allowed: Optional[str] = request.headers.get(u'Origin')
-
-        if cors_origin_allowed is not None:
-            response.headers['Access-Control-Allow-Origin'] = \
-                cors_origin_allowed
-            response.headers['Access-Control-Allow-Methods'] = \
-                'POST, PUT, GET, DELETE, OPTIONS'
-            response.headers['Access-Control-Allow-Headers'] = \
-                f'{config.get("apitoken_header_name")}, Content-Type'
+    for cookie in request.cookies:
+        # Remove the ckan session cookie if logged out.
+        if cookie == u'ckan' and not getattr(g, u'user', None):
+            # Check session for valid data (including flash messages)
+            is_valid_cookie_data = False
+            for key, value in session.items():
+                if not key.startswith(u'_') and value:
+                    is_valid_cookie_data = True
+                    break
+            if not is_valid_cookie_data:
+                if session.id:
+                    log.debug(u'No valid session data - deleting session')
+                    log.debug(u'Session: %r', session.items())
+                    session.delete()
+                else:
+                    log.debug(u'No session id - deleting session cookie')
+                    response.delete_cookie(cookie)
+        # Remove auth_tkt repoze.who cookie if user not logged in.
+        elif cookie == u'auth_tkt' and not session.id:
+            response.delete_cookie(cookie)
 
     return response
 
 
-def set_cache_control_headers_for_response(response: Response) -> Response:
+def set_cors_headers_for_response(response):
+    u'''
+    Set up Access Control Allow headers if either origin_allow_all is True, or
+    the request Origin is in the origin_whitelist.
+    '''
+    if config.get(u'ckan.cors.origin_allow_all') \
+       and request.headers.get(u'Origin'):
+
+        cors_origin_allowed = None
+        if asbool(config.get(u'ckan.cors.origin_allow_all')):
+            cors_origin_allowed = b'*'
+        elif config.get(u'ckan.cors.origin_whitelist') and \
+                request.headers.get(u'Origin') \
+                in config[u'ckan.cors.origin_whitelist'].split(u' '):
+            # set var to the origin to allow it.
+            cors_origin_allowed = request.headers.get(u'Origin')
+
+        if cors_origin_allowed is not None:
+            response.headers[b'Access-Control-Allow-Origin'] = \
+                cors_origin_allowed
+            response.headers[b'Access-Control-Allow-Methods'] = \
+                b'POST, PUT, GET, DELETE, OPTIONS'
+            response.headers[b'Access-Control-Allow-Headers'] = \
+                b'X-CKAN-API-KEY, Authorization, Content-Type'
+
+    return response
+
+
+def set_cache_control_headers_for_response(response):
 
     # __no_cache__ should not be present when caching is allowed
     allow_cache = u'__no_cache__' not in request.environ
@@ -54,7 +108,7 @@ def set_cache_control_headers_for_response(response: Response) -> Response:
     if allow_cache:
         response.cache_control.public = True
         try:
-            cache_expire = config.get(u'ckan.cache_expires')
+            cache_expire = int(config.get(u'ckan.cache_expires', 0))
             response.cache_control.max_age = cache_expire
             response.cache_control.must_revalidate = True
         except ValueError:
@@ -65,11 +119,18 @@ def set_cache_control_headers_for_response(response: Response) -> Response:
     return response
 
 
-def identify_user() -> Optional[Response]:
-    u'''This function exists only to maintain backward compatibility
-    to extensions that still need g.user/g.userobj.
+def identify_user():
+    u'''Try to identify the user
+    If the user is identified then:
+      g.user = user name (unicode)
+      g.userobj = user object
+      g.author = user name
+    otherwise:
+      g.user = None
+      g.userobj = None
+      g.author = user's IP address (unicode)
 
-    Note: flask_login now identifies users for us behind the scene.
+    Note: Remember, when running under Pylons, `g` is the Pylons `c` object
     '''
     # see if it was proxied first
     g.remote_addr = request.environ.get(u'HTTP_X_FORWARDED_FOR', u'')
@@ -86,56 +147,147 @@ def identify_user() -> Optional[Response]:
             if response:
                 return response
             try:
-                if current_user.is_authenticated or g.user:
+                if g.user:
                     break
             except AttributeError:
                 continue
-    # sets the g.user/g.userobj for extensions
-    g.user = current_user.name
-    g.userobj = '' if current_user.is_anonymous else current_user
 
-    # logout, if a user that was still logged in is deleted.
-    if current_user.is_authenticated:
-        if not current_user.is_active:
-            logout_user()
+    # We haven't identified the user so try the default methods
+    if not getattr(g, u'user', None):
+        response = _identify_user_default()
+        if response:
+            return response
 
     # If we have a user but not the userobj let's get the userobj. This means
     # that IAuthenticator extensions do not need to access the user model
     # directly.
     if g.user:
-        if not getattr(g, u'userobj', None):
+        if not getattr(g, u'userobj', None) or inspect(g.userobj).expired:
             g.userobj = model.User.by_name(g.user)
 
     # general settings
     if g.user:
-        if g.userobj:
-            userobj = model.User.by_name(g.user)
-            userobj.set_user_last_active()  # type: ignore
         g.author = g.user
     else:
         g.author = g.remote_addr
-    g.author = str(g.author)
+    g.author = text_type(g.author)
 
 
-def _get_user_for_apitoken() -> Optional[model.User]:  # type: ignore
-    apitoken_header_name = config.get("apitoken_header_name")
-    apitoken: str = request.headers.get(apitoken_header_name, u'')
+def _get_remote_user_content():
 
-    if not apitoken:
+    parts = six.ensure_text(
+        request.environ.get(u'REMOTE_USER', u'')).split(u',')
+
+    if len(parts) == 1:
+        # Tests can pass just a user name or id
+        return parts[0], None
+    elif len(parts) == 2:
+        # Standard auth cookie format: user_id,serial_counter
+        return parts[0], int(parts[1])
+    else:
+        # Something went wrong, don't authenticate
+        return None, None
+
+
+def _logout_user():
+
+    environ = request.environ
+    if u'repoze.who.plugins' in environ:
+        path = getattr(
+            environ[u'repoze.who.plugins'][u'friendlyform'],
+            u'logout_handler_path'
+        )
+        return redirect(path)
+
+
+def _identify_user_default():
+    u'''
+    Identifies the user using two methods:
+    a) If they logged into the web interface then repoze.who will
+       set REMOTE_USER  (this can also be set manually in tests).
+    b) For API calls they may set a header with an API key.
+    '''
+
+    # environ['REMOTE_USER'] can be set:
+    #   1. By repoze.who if it authenticates a user's cookie (a standard
+    #      browser request). This has the format user_id,serial_counter
+    #   2. Manually in tests when passing `extra_environ` to a test client
+    #      request. This can have just the user name or id
+    # But repoze.who doesn't check the user (still) exists in the database,
+    # we need to do that here.
+    g.user = u''
+
+    user_id, serial_counter = _get_remote_user_content()
+
+    if user_id:
+
+        if request.environ.get(u'CKAN_TESTING'):
+            # For requests coming from the test client we allow users to be
+            # identified either by user name or id
+            g.userobj = model.User.get(user_id)
+
+            # Serial counter is optional in tests
+            if serial_counter is not None and int(serial_counter) != 1:
+                return _logout_user()
+
+        else:
+            # For normal, browser cookie based requests we enforce that the
+            # user is identified by its id
+            g.userobj = model.Session.query(model.User).filter_by(
+                id=user_id).first()
+
+            if serial_counter is None or int(serial_counter) != 1:
+                return _logout_user()
+
+        if g.userobj is not None and g.userobj.is_active():
+            g.user = g.userobj.name
+        else:
+            # This occurs when a user that was still logged in is deleted, or
+            # when you are logged in, clean db and then restart (or when you
+            # change your username). There is no user object, so even though
+            # repoze thinks you are logged in and your cookie has
+            # ckan_display_name, we need to force user to logout and login
+            # again to get the User object.
+
+            return _logout_user()
+
+    else:
+        g.userobj = _get_user_for_apikey()
+        if g.userobj is not None:
+            g.user = g.userobj.name
+
+
+def _get_user_for_apikey():
+    apikey_header_name = config.get(APIKEY_HEADER_NAME_KEY,
+                                    APIKEY_HEADER_NAME_DEFAULT)
+    apikey = request.headers.get(apikey_header_name, u'')
+    if not apikey:
+        apikey = request.environ.get(apikey_header_name, u'')
+    if not apikey:
+        # For misunderstanding old documentation (now fixed).
+        apikey = request.environ.get(u'HTTP_AUTHORIZATION', u'')
+    if not apikey:
+        apikey = request.environ.get(u'Authorization', u'')
+        # Forget HTTP Auth credentials (they have spaces).
+        if u' ' in apikey:
+            apikey = u''
+    if not apikey:
         return None
-    apitoken = str(apitoken)
-    log.debug(f'Received API Token: {apitoken[:10]}[...]')
+    apikey = six.ensure_text(apikey, errors=u"ignore")
+    log.debug(u'Received API Key: %s' % apikey)
+    query = model.Session.query(model.User)
+    user = query.filter_by(apikey=apikey).first()
 
-    user = api_token.get_user_from_token(apitoken)
-
+    if not user:
+        user = api_token.get_user_from_token(apikey)
     return user
 
 
-def set_controller_and_action() -> None:
-    g.blueprint, g.view = p.toolkit.get_endpoint()
+def set_controller_and_action():
+    g.controller, g.action = p.toolkit.get_endpoint()
 
 
-def handle_i18n(environ: Optional[dict[str, Any]] = None) -> None:
+def handle_i18n(environ=None):
     u'''
     Strips the locale code from the requested url
     (eg '/sk/about' -> '/about') and sets environ variables for the
@@ -146,9 +298,8 @@ def handle_i18n(environ: Optional[dict[str, Any]] = None) -> None:
         * CKAN_CURRENT_URL is set to the current application url
     '''
     environ = environ or request.environ
-    assert environ
     locale_list = get_locales_from_config()
-    default_locale = config.get(u'ckan.locale_default')
+    default_locale = config.get(u'ckan.locale_default', u'en')
 
     # We only update once for a request so we can keep
     # the language and original url which helps with 404 pages etc
@@ -169,7 +320,7 @@ def handle_i18n(environ: Optional[dict[str, Any]] = None) -> None:
         set_ckan_current_url(environ)
 
 
-def set_ckan_current_url(environ: Any) -> None:
+def set_ckan_current_url(environ):
     # Current application url
     path_info = environ[u'PATH_INFO']
     # sort out weird encodings

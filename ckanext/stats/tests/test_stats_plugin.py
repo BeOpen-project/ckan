@@ -1,6 +1,9 @@
 # encoding: utf-8
 
+import os
+
 import pytest
+import ckan.plugins.toolkit as tk
 
 
 @pytest.mark.ckan_config(u'ckan.plugins', u'stats')

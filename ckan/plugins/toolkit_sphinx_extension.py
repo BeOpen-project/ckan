@@ -18,12 +18,12 @@ into plugins-toolkit.rst manually before running Sphinx).
 
 '''
 import inspect
-from typing import Any, Callable, Optional
+import types
 
 import ckan.plugins.toolkit as toolkit
 
 
-def setup(app: Any):
+def setup(app):
     '''Setup this Sphinx extension. Called once when initializing Sphinx.
 
     '''
@@ -32,9 +32,7 @@ def setup(app: Any):
     app.connect('source-read', source_read)
 
 
-def format_function(name: str,
-                    function: Callable[..., Any],
-                    docstring: Optional[str] = None) -> str:
+def format_function(name, function, docstring=None):
     '''Return a Sphinx .. function:: directive for the given function.
 
     The directive includes the function's docstring if it has one.
@@ -62,7 +60,7 @@ def format_function(name: str,
 
     # Get the arguments of the function, as a string like:
     # "(foo, bar=None, ...)"
-    argstring = str(inspect.signature(function))
+    argstring = inspect.formatargspec(*inspect.getargspec(function))
 
     docstring = docstring or inspect.getdoc(function)
     if docstring is None:
@@ -74,9 +72,7 @@ def format_function(name: str,
     return template.format(function=name, args=argstring, docstring=docstring)
 
 
-def format_class(
-        name: str, class_: Any,
-        docstring: Optional[str] = None) -> str:
+def format_class(name, class_, docstring=None):
     '''Return a Sphinx .. class:: directive for the given class.
 
     The directive includes the class's docstring if it has one.
@@ -112,8 +108,7 @@ def format_class(
     return template.format(cls=name, docstring=docstring)
 
 
-def format_object(
-        name: str, object_: Any, docstring: Optional[str] = None) -> str:
+def format_object(name, object_, docstring=None):
     '''Return a Sphinx .. attribute:: directive for the given object.
 
     The directive includes the object's class's docstring if it has one.
@@ -149,7 +144,7 @@ def format_object(
     return template.format(obj=name, docstring=docstring)
 
 
-def source_read(app: Any, docname: str, source: Any) -> None:
+def source_read(app, docname, source):
     '''Transform the contents of plugins-toolkit.rst to contain reference docs.
 
     '''
@@ -157,10 +152,8 @@ def source_read(app: Any, docname: str, source: Any) -> None:
     if docname != 'extensions/plugins-toolkit':
         return
 
-    source_ = '\n'
+    source_ = ''
     for name, thing in inspect.getmembers(toolkit):
-        if name not in toolkit.__all__:
-            continue
 
         # The plugins toolkit can override the docstrings of some of its
         # members (e.g. things that are imported from third-party libraries)

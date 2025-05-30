@@ -33,18 +33,6 @@ keys against core tables.
 
 .. _extensions db migrations:
 
---------------------------------------------------
-Don't automatically modify the database structure
---------------------------------------------------
-
-If your extension uses custom database tables then it needs to modify the
-database structure, for example to add the tables after its installation or to
-migrate them after an update. These modifications should not be performed
-automatically when the extension is loaded, since this can lead to `dead-locks
-and other problems`_.
-
-.. _dead-locks and other problems: https://github.com/ckan/ideas-and-roadmap/issues/164
-
 ------------------------------------------
 Use migrations when introducing new models
 ------------------------------------------
@@ -94,24 +82,13 @@ available in CKAN for this purpose:
 Declare models using shared metadata
 ------------------------------------
 
-.. versionadded:: 2.10
-
-Use the :py:class:`~ckan.plugins.toolkit.BaseModel` class from the plugins toolkit to implement SQLAlchemy
-declarative models in your extension. It is attached to the core metadata object, so it helps SQLAlchemy
-to resolve cascade relationships and control orphan removals. In addition, the ``clean_db`` test
-fixture will also handle these tables when cleaning the database.
+Use the :py:obj:`ckan.model.meta.metadata` object for any new SQLAlchemy model
+registered via an extension. It helps SQLAlchemy to resolve cascade relationships
+and control orphan removals. In addition, the ``clean_db`` test fixture cleans
+tables for every model registered using :py:obj:`ckan.model.meta.metadata`, so
+new models are integrated into the test suite without additional efforts.
 
 Example::
-
-    from ckan.plugins import toolkit
-
-    class ExtModel(toolkit.BaseModel):
-        __tablename__ = "ext_model"
-        id = Column(String(50), primary_key=True)
-        ...
-
-In previous versions of CKAN, you can link to the :py:obj:`ckan.model.meta.metadata` object
-directly in your own class::
 
     import ckan.model as model
     from sqlalchemy.ext.declarative import declarative_base
@@ -121,7 +98,7 @@ directly in your own class::
     class ExtModel(Base):
         __tablename__ = "ext_model"
         id = Column(String(50), primary_key=True)
-        ...
+
 
 -------------------------------------------------------
 Implement each plugin class in a separate Python module
@@ -161,7 +138,7 @@ the name of your extension. For example:
   with the name of your extension. For example
   ``assets/example_theme_popover.js``:
 
-  .. literalinclude:: /../ckanext/example_theme_docs/v16_initialize_a_javascript_module/assets/example_theme_popover.js
+  .. literalinclude:: /../ckanext/example_theme_docs/v16_initialize_a_javascript_module/fanstatic/example_theme_popover.js
 
 * The names of *API action functions* introduced by your extension should begin
   with the name of your extension. For example
@@ -187,7 +164,7 @@ the CKAN site ID, which is available via
 
     site_id = config[u'ckan.site_id']
 
-Currently this only affects the :ref:`Redis database <ckan.redis.url>`:
+Currently this only affects the :ref:`Redis database <ckan_redis_url>`:
 
 * All *keys in the Redis database* created by your extension should be prefixed
   with both the CKAN site ID and your extension's name.
@@ -220,32 +197,17 @@ such as::
 On the flip side, be mindful that this could also create version conflicts with
 requirements of considerably newer or older extensions.
 
-.. _csrf_best_practices:
 
-----------------------------
-Implementing CSRF protection
-----------------------------
+--------------------------------------------------
+Do not automatically modify the database structure
+--------------------------------------------------
 
-CKAN 2.10 introduces CSRF protection for all the frontend forms. Extensions are currently excluded from the CSRF protection to give time to update them, but CSRF protection will be enforced in the future.
+If your extension uses custom database tables then it needs to modify the
+database structure, for example to add the tables after its installation or to
+migrate them after an update. These modifications should not be performed
+automatically when the extension is loaded, since this can lead to `dead-locks
+and other problems`_.
 
-To add CSRF protection to your extensions add the following helper call to your form templates::
+Instead, create a :doc:`ckan command </maintaining/cli>` which can be run separately.
 
-    <form class="dataset-form form-horizontal" method="post" enctype="multipart/form-data">
-      {{ h.csrf_input() }}
-
-If your extension needs to support older CKAN versions, use the following::
-
-    <form class="dataset-form form-horizontal" method="post" enctype="multipart/form-data">
-      {{ h.csrf_input() if 'csrf_input' in h }}
-
-
-Forms that are submitted via JavaScript modules also need to submit the CSRF token, here’s an example of how to append it to an existing form::
-
-  // Get the csrf value from the page meta tag
-  var csrf_value = $('meta[name=_csrf_token]').attr('content')
-  // Create the hidden input
-  var hidden_csrf_input = $('<input name="_csrf_token" type="hidden" value="'+csrf_value+'">')
-  // Insert the hidden input at the beginning of the form
-  hidden_csrf_input.prependTo(form)
-
-API calls performed from JavaScript modules from the UI (which use cookie-based authentication) should also include the token, in this case in the ``X-CSRFToken`` header. CKAN Modules using the builtin `client <https://docs.ckan.org/en/latest/contributing/frontend/index.html?#client>`_) to perform API calls will have the header added automatically. If you are performing API calls directly from a UI module you will need to add the header yourself.
+.. _dead-locks and other problems: https://github.com/ckan/ideas-and-roadmap/issues/164

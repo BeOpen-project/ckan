@@ -1,6 +1,7 @@
 # encoding: utf-8
 
 import pytest
+from ckan.common import config
 
 from ckan.plugins.toolkit import get_validator, Invalid
 from ckan import plugins
@@ -30,7 +31,7 @@ class TestIValidators(object):
 
     def test_overridden_validator(self):
         v = get_validator("unicode_only")
-        assert u"Hola cómo estás" == v("Hola c\xf3mo est\xe1s")
+        assert u"Hola cómo estás" == v(b"Hola c\xf3mo est\xe1s")
 
 
 class TestNoIValidators(object):

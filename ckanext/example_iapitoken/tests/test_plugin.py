@@ -2,6 +2,7 @@
 
 import json
 import pytest
+import six
 
 import ckan.model as model
 import ckan.tests.factories as factories
@@ -10,7 +11,7 @@ import ckan.plugins.toolkit as tk
 
 
 @pytest.mark.ckan_config(u"ckan.plugins", u"example_iapitoken")
-@pytest.mark.usefixtures(u"non_clean_db", u"with_plugins")
+@pytest.mark.usefixtures(u"clean_db", u"with_plugins")
 class TestIApiTokenPlugin(object):
     def test_token_is_encoded(self):
         user = factories.User()
@@ -52,7 +53,7 @@ class TestIApiTokenPlugin(object):
         app.get(
             tk.h.url_for(u"api.action", logic_function=u"user_show", ver=3),
             params={u"id": user[u"id"]},
-            headers={u"authorization": data[u"token"]},
+            headers={u"authorization": six.ensure_str(data[u"token"])},
         )
 
         obj = model.ApiToken.get(jti)
@@ -62,7 +63,7 @@ class TestIApiTokenPlugin(object):
         app.get(
             tk.h.url_for(u"api.action", logic_function=u"user_show", ver=3),
             params={u"id": user[u"id"]},
-            headers={u"authorization": data[u"token"]},
+            headers={u"authorization": six.ensure_str(data[u"token"])},
         )
 
         obj = model.ApiToken.get(jti)

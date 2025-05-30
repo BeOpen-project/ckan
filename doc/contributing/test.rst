@@ -20,61 +20,11 @@ tested manually.
 Back-end tests
 --------------
 
-Most of CKAN's testsuite is for the backend Python code. You can run
-the code in a dockerized environment that replicates circleci, or you
-can use a virtual environment based testing.
-
-~~~~~~~~~~~~~~~~
-Dockerized Tests
-~~~~~~~~~~~~~~~~
-
-The ``test-infrastructure`` directory contains a configuration using
-docker compose replicating the circleci test process on the local
-machine.
-
-Set up the testing environment
-==============================
-.. parsed-literal::
-
-   cd test-infrastructure
-   ./setup.sh
-
-This starts a docker compose environment with the supporting postgres,
-redis, and solr containers from the circleci test environment. The
-databases are initialized, and the current ckan is installed into a
-python container.
-
-
-Run the tests
-=============
-
-.. parsed-literal::
-
-   ./execute.sh
-
-Or, if you wish to run a specific test, for example
-``test_get_translated`` in ``test_helpers.py``:
-
-.. parsed-literal::
-
-   docker compose exec ckan pytest --ckan-ini=test-core-circle-ci.ini ckan/tests/lib/test_helpers.py::test_get_translated
-
-
-Teardown
-========
-
-.. parsed-literal::
-
-   ./teardown.sh
-
+Most of CKAN's testsuite is for the backend Python code.
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-Virtual Environment based tests
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-
 Install additional dependencies
-===============================
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Some additional dependencies are needed to run the tests. Make sure you've
 created a config file at |ckan.ini|, then activate your
@@ -93,9 +43,9 @@ environment:
 
 .. _datastore-test-set-permissions:
 
-
+~~~~~~~~~~~~~~~~~~~~~~~~~
 Set up the test databases
-=========================
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Create test databases:
 
@@ -112,15 +62,15 @@ When the tests run they will use these databases, because in ``test-core.ini``
 they are specified in the ``sqlalchemy.url`` and ``ckan.datastore.write_url``
 connection strings.
 
-You should also make sure that the :ref:`Redis database <ckan.redis.url>`
+You should also make sure that the :ref:`Redis database <ckan_redis_url>`
 configured in ``test-core.ini`` is different from your production database.
 
 
 .. _solr-multi-core:
 
-
+~~~~~~~~~~~~~~~~~~~~~~~~~
 Configure Solr Multi-core
-=========================
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The tests assume that Solr is configured 'multi-core', whereas the default
 Solr set-up is often 'single-core'. You can ask Solr for its cores status::
@@ -165,9 +115,9 @@ To enable multi-core:
        solr_url = http://127.0.0.1:8983/solr/ckan
 
 
-
+~~~~~~~~~~~~~
 Run the tests
-=============
+~~~~~~~~~~~~~
 
 To run CKAN's tests using PostgreSQL as the database, you have to give the
 ``--ckan-ini=test-core.ini`` option on the command line. This command will
@@ -193,10 +143,9 @@ OperationalError
 
 SolrError
 =========
-::
 
-    SolrError: Solr responded with an error (HTTP 404): [Reason: None]
-    <html><head><meta content="text/html; charset=ISO-8859-1" http-equiv="Content-Type" /><title>Error 404 NOT_FOUND</title></head><body><h2>HTTP ERROR 404</h2><p>Problem accessing /solr/ckan/select/. Reason:<pre>    NOT_FOUND</pre></p><hr /><i><small>Powered by Jetty://</small></i>``
+``SolrError: Solr responded with an error (HTTP 404): [Reason: None]
+<html><head><meta content="text/html; charset=ISO-8859-1" http-equiv="Content-Type" /><title>Error 404 NOT_FOUND</title></head><body><h2>HTTP ERROR 404</h2><p>Problem accessing /solr/ckan/select/. Reason:<pre>    NOT_FOUND</pre></p><hr /><i><small>Powered by Jetty://</small></i>``
 
 This means your solr_url is not corresponding with your SOLR. When running tests, it is usually easiest to change your set-up to match the default solr_url in test-core.ini. Often this means switching to multi-core - see :ref:`solr-multi-core`.
 

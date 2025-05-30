@@ -1,8 +1,5 @@
 # encoding: utf-8
-from __future__ import annotations
 
-from typing import Any
-import sqlalchemy as sa
 from sqlalchemy import orm
 
 import ckan.model as model
@@ -17,13 +14,13 @@ def extract(d, keys):
     return dict((k, d[k]) for k in keys if k in d)
 
 
-def clear_db(Session):  # noqa
+def clear_db(Session):
     drop_tables = u"""select 'drop table "' || tablename || '" cascade;'
                     from pg_tables where schemaname = 'public' """
     c = Session.connection()
-    results = c.execute(sa.text(drop_tables))
+    results = c.execute(drop_tables)
     for result in results:
-        c.execute(sa.text(result[0]))
+        c.execute(result[0])
 
     drop_functions_sql = u"""
         SELECT 'drop function if exists ' || quote_ident(proname) || '();'
@@ -31,17 +28,15 @@ def clear_db(Session):  # noqa
         INNER JOIN pg_namespace ns ON (pg_proc.pronamespace = ns.oid)
         WHERE ns.nspname = 'public' AND proname != 'populate_full_text_trigger'
         """
-    drop_functions = u"".join(
-        r[0] for r in c.execute(sa.text(drop_functions_sql))
-    )
+    drop_functions = u"".join(r[0] for r in c.execute(drop_functions_sql))
     if drop_functions:
-        c.execute(sa.text(drop_functions))
+        c.execute(drop_functions)
 
     Session.commit()
     Session.remove()
 
 
-def rebuild_all_dbs(Session):  # noqa
+def rebuild_all_dbs(Session):
     """ If the tests are running on the same db, we have to make sure that
     the ckan tables are recrated.
     """
@@ -56,7 +51,7 @@ def rebuild_all_dbs(Session):  # noqa
 
 
 def set_url_type(resources, user):
-    context = {"user": user["name"]}
+    context = {"user": user.name}
     for resource in resources:
         resource = p.toolkit.get_action("resource_show")(
             context, {"id": resource.id}
@@ -65,19 +60,19 @@ def set_url_type(resources, user):
         p.toolkit.get_action("resource_update")(context, resource)
 
 
-def execute_sql(sql: str, params: dict[str, Any]):
+def execute_sql(sql, *args):
     engine = db.get_write_engine()
     session = orm.scoped_session(orm.sessionmaker(bind=engine))
-    return session.connection().execute(sa.text(sql), params)
+    return session.connection().execute(sql, *args)
 
 
 def when_was_last_analyze(resource_id):
     results = execute_sql(
         """SELECT last_analyze
         FROM pg_stat_user_tables
-        WHERE relname=:relname;
+        WHERE relname=%s;
         """,
-        {"relname": resource_id},
+        resource_id,
     ).fetchall()
     return results[0][0]
 

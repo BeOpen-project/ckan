@@ -2603,7 +2603,7 @@ msgid "Submit"
 msgstr ""
 
 #: ckan/templates/page.html:6
-msgid "Skip to main content"
+msgid "Skip to content"
 msgstr ""
 
 #: ckan/templates/page.html:36

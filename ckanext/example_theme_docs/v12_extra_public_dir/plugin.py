@@ -1,6 +1,5 @@
 # encoding: utf-8
 
-from ckan.common import CKANConfig
 import ckan.plugins as plugins
 import ckan.plugins.toolkit as toolkit
 
@@ -11,7 +10,7 @@ def most_popular_groups():
     # Get a list of all the site's groups from CKAN, sorted by number of
     # datasets.
     groups = toolkit.get_action('group_list')(
-        {}, {'sort': 'package_count desc', 'all_fields': True})
+        data_dict={'sort': 'package_count desc', 'all_fields': True})
 
     # Truncate the list to the 10 most popular groups only.
     groups = groups[:10]
@@ -28,7 +27,7 @@ class ExampleThemePlugin(plugins.SingletonPlugin):
     # Declare that this plugin will implement ITemplateHelpers.
     plugins.implements(plugins.ITemplateHelpers)
 
-    def update_config(self, config: CKANConfig):
+    def update_config(self, config):
 
         # Add this plugin's templates dir to CKAN's extra_template_paths, so
         # that CKAN will use this plugin's custom templates.

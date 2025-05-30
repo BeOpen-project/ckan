@@ -1,28 +1,27 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import datetime
-from typing import Any, Callable, ClassVar, Optional
 
-
+from six import text_type
 from collections import OrderedDict
 from sqlalchemy.ext.orderinglist import ordering_list
 from sqlalchemy import orm
 from ckan.common import config
-from sqlalchemy import types, Column, Table, ForeignKey, Index
-from typing_extensions import Self
+from sqlalchemy import types, func, Column, Table, ForeignKey
 
-import ckan.model.meta as meta
-import ckan.model.core as core
-import ckan.model.types as _types
-import ckan.model.domain_object as domain_object
-
+from ckan.model import (
+    meta,
+    core,
+    types as _types,
+    extension,
+    domain_object,
+)
+import ckan.lib.dictization
 from .package import Package
-
+import ckan.model
 
 __all__ = ['Resource', 'resource_table']
 
-Mapped = orm.Mapped
 CORE_RESOURCE_COLUMNS = ['url', 'format', 'description', 'hash', 'name',
                          'resource_type', 'mimetype', 'mimetype_inner',
                          'size', 'created', 'last_modified',
@@ -35,7 +34,7 @@ resource_table = Table(
     Column('id', types.UnicodeText, primary_key=True,
            default=_types.make_uuid),
     Column('package_id', types.UnicodeText,
-           ForeignKey('package.id'), nullable=False),
+           ForeignKey('package.id')),
     Column('url', types.UnicodeText, nullable=False, doc='remove_if_not_provided'),
     # XXX: format doc='remove_if_not_provided' makes lots of tests fail, fix tests?
     Column('format', types.UnicodeText),
@@ -56,43 +55,15 @@ resource_table = Table(
     Column('url_type', types.UnicodeText),
     Column('extras', _types.JsonDictType),
     Column('state', types.UnicodeText, default=core.State.ACTIVE),
-    Index('idx_package_resource_id', 'id'),
-    Index('idx_package_resource_package_id', 'package_id'),
-    Index('idx_package_resource_url', 'url'),
 )
 
 
 class Resource(core.StatefulObjectMixin,
                domain_object.DomainObject):
-    id: Mapped[str]
-    package_id: Mapped[Optional[str]]
-    url: Mapped[str]
-    format: Mapped[str]
-    description: Mapped[str]
-    hash: Mapped[str]
-    position: Mapped[int]
-    name: Mapped[str]
-    resource_type: Mapped[str]
-    mimetype: Mapped[str]
-    size: Mapped[int]
-    created: Mapped[datetime.datetime]
-    last_modified: Mapped[datetime.datetime]
-    metadata_modified: Mapped[datetime.datetime]
-    cache_url: Mapped[str]
-    cache_last_update: Mapped[datetime.datetime]
-    url_type: Mapped[str]
-    extras: dict[str, Any]
-    state: Mapped[str]
+    extra_columns = None
 
-    extra_columns: ClassVar[Optional[list[str]]] = None
-
-    package: Mapped[Package]
-
-    url_changed: Optional[bool]
-
-    def __init__(self, url: str=u'', format: str=u'', description: str=u'',
-                 hash: str=u'', extras: Optional[dict[str, Any]]=None,
-                 package_id: Optional[str]=None, **kwargs: Any) -> None:
+    def __init__(self, url=u'', format=u'', description=u'', hash=u'',
+                 extras=None, package_id=None, **kwargs):
         self.id = _types.make_uuid()
         self.url = url
         self.format = format
@@ -113,8 +84,8 @@ class Resource(core.StatefulObjectMixin,
         if kwargs:
             raise TypeError('unexpected keywords %s' % kwargs)
 
-    def as_dict(self, core_columns_only: bool=False) -> dict[str, Any]:
-        _dict: dict[str, Any] = OrderedDict()
+    def as_dict(self, core_columns_only=False):
+        _dict = OrderedDict()
         cols = self.get_columns()
         if not core_columns_only:
             cols = ['id'] + cols + ['position']
@@ -123,19 +94,18 @@ class Resource(core.StatefulObjectMixin,
             if isinstance(value, datetime.datetime):
                 value = value.isoformat()
             _dict[col] = value
-        if self.extras:
-            for k, v in self.extras.items():
-                _dict[k] = v
+        for k, v in self.extras.items() if self.extras else []:
+            _dict[k] = v
         if self.package_id and not core_columns_only:
             _dict["package_id"] = self.package_id
         return _dict
 
-    def get_package_id(self) -> Optional[str]:
+    def get_package_id(self):
         '''Returns the package id for a resource. '''
         return self.package_id
 
     @classmethod
-    def get(cls, reference: str) -> Optional[Self]:
+    def get(cls, reference):
         '''Returns a resource object referenced by its name or id.'''
         if not reference:
             return None
@@ -146,7 +116,7 @@ class Resource(core.StatefulObjectMixin,
         return resource
 
     @classmethod
-    def get_columns(cls, extra_columns: bool=True) -> list[str]:
+    def get_columns(cls, extra_columns=True):
         '''Returns the core editable columns of the resource.'''
         if extra_columns:
             return CORE_RESOURCE_COLUMNS + cls.get_extra_columns()
@@ -154,48 +124,67 @@ class Resource(core.StatefulObjectMixin,
             return CORE_RESOURCE_COLUMNS
 
     @classmethod
-    def get_extra_columns(cls) -> list[str]:
+    def get_extra_columns(cls):
         if cls.extra_columns is None:
-            cls.extra_columns = config.get("ckan.extra_resource_fields")
+            cls.extra_columns = config.get(
+                'ckan.extra_resource_fields', '').split()
             for field in cls.extra_columns:
                 setattr(cls, field, DictProxy(field, 'extras'))
-        assert cls.extra_columns is not None
         return cls.extra_columns
 
-    def related_packages(self) -> list[Package]:
+    @classmethod
+    def get_all_without_views(cls, formats=[]):
+        '''Returns all resources that have no resource views
+
+        :param formats: if given, returns only resources that have no resource
+            views and are in any of the received formats
+        :type formats: list
+
+        :rtype: list of ckan.model.Resource objects
+        '''
+        query = meta.Session.query(cls).outerjoin(ckan.model.ResourceView) \
+                    .filter(ckan.model.ResourceView.id == None)
+
+        if formats:
+            lowercase_formats = [f.lower() for f in formats]
+            query = query.filter(func.lower(cls.format).in_(lowercase_formats))
+
+        return query.all()
+
+    def related_packages(self):
         return [self.package]
 
 
 ## Mappers
 
-meta.registry.map_imperatively(Resource, resource_table, properties={
-    'package': orm.relationship(
+meta.mapper(Resource, resource_table, properties={
+    'package': orm.relation(
         Package,
         # all resources including deleted
         # formally package_resources_all
         backref=orm.backref('resources_all',
                             collection_class=ordering_list('position'),
-                            cascade='all, delete'
+                            cascade='all, delete',
+                            order_by=resource_table.c.position,
                             ),
     )
-})
+},
+extension=[extension.PluginMapperExtension()],
+)
 
 
-def resource_identifier(obj: Resource) -> str:
+def resource_identifier(obj):
     return obj.id
 
 
 class DictProxy(object):
 
-    def __init__(
-            self,
-            target_key: str, target_dict: Any,
-            data_type: Callable[[Any], Any] = str):
+    def __init__(self, target_key, target_dict, data_type=text_type):
         self.target_key = target_key
         self.target_dict = target_dict
         self.data_type = data_type
 
-    def __get__(self, obj: Any, type: Any):
+    def __get__(self, obj, type):
 
         if not obj:
             return self
@@ -204,7 +193,7 @@ class DictProxy(object):
         if proxied_dict:
             return proxied_dict.get(self.target_key)
 
-    def __set__(self, obj: Any, value: Any):
+    def __set__(self, obj, value):
 
         proxied_dict = getattr(obj, self.target_dict)
         if proxied_dict is None:
@@ -213,7 +202,7 @@ class DictProxy(object):
 
         proxied_dict[self.target_key] = self.data_type(value)
 
-    def __delete__(self, obj: Any):
+    def __delete__(self, obj):
 
         proxied_dict = getattr(obj, self.target_dict)
         proxied_dict.pop(self.target_key)

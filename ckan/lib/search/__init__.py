@@ -1,59 +1,41 @@
 # encoding: utf-8
 
-from __future__ import annotations
-
+from __future__ import print_function
 import logging
 import sys
 import cgitb
 import warnings
-import traceback
-
+import base64
 import xml.dom.minidom
-from typing import Collection, Any, Optional, Type, overload
 
 import requests
-from requests.auth import HTTPBasicAuth
 
+from ckan.common import asbool, asint, config
 import ckan.model as model
-import ckan.model.domain_object as domain_object
 import ckan.plugins as p
 import ckan.logic as logic
-from ckan.types import Context
 
 from ckan.lib.search.common import (
-    make_connection, SearchIndexError, SearchQueryError,  # type: ignore
-    SolrConnectionError, # type: ignore
-    SearchError, is_available, SolrSettings, config
+    SearchIndexError, SearchError, SearchQueryError,
+    make_connection, is_available, SolrSettings
 )
-from ckan.lib.search.index import (
-    SearchIndex, PackageSearchIndex, NoopSearchIndex
-)
+from ckan.lib.search.index import PackageSearchIndex, NoopSearchIndex
 from ckan.lib.search.query import (
-    SearchQuery,
     TagSearchQuery, ResourceSearchQuery, PackageSearchQuery,
-    QueryOptions, convert_legacy_parameters_to_solr  # type: ignore
+    QueryOptions, convert_legacy_parameters_to_solr
 )
-from ckan.lib.search.index import SearchIndex
 
 
 log = logging.getLogger(__name__)
 
+TIMEOUT = asint(config.get('ckan.requests.timeout', 5))
 
-def text_traceback() -> str:
-    info = sys.exc_info()
+def text_traceback():
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        try:
-            text = cgitb.text(info)
-        except RuntimeError:
-            # there is werkzeug.local.LocalProxy object inside traceback, that
-            # cannot be printed out by the cgitb
-            res = "".join(traceback.format_tb(info[-1]))
-        else:
-            res = 'the original traceback:'.join(
-                text.split('the original traceback:')[1:]
-            ).strip()
-
+        res = 'the original traceback:'.join(
+            cgitb.text(sys.exc_info()).split('the original traceback:')[1:]
+        ).strip()
     return res
 
 
@@ -71,11 +53,11 @@ DEFAULT_OPTIONS = {
     'callback': None,  # simply passed through
 }
 
-_INDICES: dict[str, Type[SearchIndex]] = {
+_INDICES = {
     'package': PackageSearchIndex
 }
 
-_QUERIES: dict[str, Type[SearchQuery]] = {
+_QUERIES = {
     'tag': TagSearchQuery,
     'resource': ResourceSearchQuery,
     'package': PackageSearchQuery
@@ -85,66 +67,44 @@ SOLR_SCHEMA_FILE_OFFSET_MANAGED = '/schema?wt=schema.xml'
 SOLR_SCHEMA_FILE_OFFSET_CLASSIC = '/admin/file/?file=schema.xml'
 
 
-def _normalize_type(_type: Any) -> str:
-    if isinstance(_type, domain_object.DomainObject):
+def _normalize_type(_type):
+    if isinstance(_type, model.domain_object.DomainObject):
         _type = _type.__class__
     if isinstance(_type, type):
         _type = _type.__name__
     return _type.strip().lower()
 
 
-@overload
-def index_for(_type: Type[model.Package]) -> PackageSearchIndex: ...
-
-@overload
-def index_for(_type: Any) -> SearchIndex: ...
-
-def index_for(_type: Any) -> SearchIndex:
+def index_for(_type):
     """ Get a SearchIndex instance sub-class suitable for
         the specified type. """
     try:
         _type_n = _normalize_type(_type)
         return _INDICES[_type_n]()
-    except KeyError:
+    except KeyError as ke:
         log.warn("Unknown search type: %s" % _type)
         return NoopSearchIndex()
 
 
-@overload
-def query_for(_type: Type[model.Package]) -> PackageSearchQuery:
-    ...
-
-
-@overload
-def query_for(_type: Type[model.Resource]) -> ResourceSearchQuery:
-    ...
-
-
-@overload
-def query_for(_type: Type[model.Tag]) -> TagSearchQuery:
-    ...
-
-
-def query_for(_type: Any) -> SearchQuery:
+def query_for(_type):
     """ Get a SearchQuery instance sub-class suitable for the specified
         type. """
     try:
         _type_n = _normalize_type(_type)
         return _QUERIES[_type_n]()
-    except KeyError:
+    except KeyError as ke:
         raise SearchError("Unknown search type: %s" % _type)
 
 
-def dispatch_by_operation(entity_type: str, entity: dict[str, Any],
-                          operation: str) -> None:
+def dispatch_by_operation(entity_type, entity, operation):
     """Call the appropriate index method for a given notification."""
     try:
         index = index_for(entity_type)
-        if operation == domain_object.DomainObjectOperation.new:
+        if operation == model.domain_object.DomainObjectOperation.new:
             index.insert_dict(entity)
-        elif operation == domain_object.DomainObjectOperation.changed:
+        elif operation == model.domain_object.DomainObjectOperation.changed:
             index.update_dict(entity)
-        elif operation == domain_object.DomainObjectOperation.deleted:
+        elif operation == model.domain_object.DomainObjectOperation.deleted:
             index.remove_dict(entity)
         else:
             log.warn("Unknown operation: %s" % operation)
@@ -159,31 +119,28 @@ class SynchronousSearchPlugin(p.SingletonPlugin):
     """Update the search index automatically."""
     p.implements(p.IDomainObjectModification, inherit=True)
 
-    def notify(self, entity: Any, operation: str) -> None:
-        if not isinstance(entity, model.Package):
+    def notify(self, entity, operation):
+        if (not isinstance(entity, model.Package) or
+                not asbool(config.get('ckan.search.automatic_indexing', True))):
             return
-        if operation != domain_object.DomainObjectOperation.deleted:
+        if operation != model.domain_object.DomainObjectOperation.deleted:
             dispatch_by_operation(
                 entity.__class__.__name__,
-                logic.get_action('package_show')({
-                        'ignore_auth': True,
-                        'validate': False,
-                        'use_cache': False
-                    }, {'id': entity.id}), operation)
-        elif operation == domain_object.DomainObjectOperation.deleted:
+                logic.get_action('package_show')(
+                    {'model': model, 'ignore_auth': True, 'validate': False,
+                     'use_cache': False},
+                    {'id': entity.id}),
+                operation
+            )
+        elif operation == model.domain_object.DomainObjectOperation.deleted:
             dispatch_by_operation(entity.__class__.__name__,
                                   {'id': entity.id}, operation)
         else:
             log.warn("Discarded Sync. indexing for: %s" % entity)
 
 
-def rebuild(package_id: Optional[str] = None,
-            only_missing: bool = False,
-            force: bool = False,
-            defer_commit: bool = False,
-            package_ids: Optional[Collection[str]] = None,
-            quiet: bool = False,
-            clear: bool = False):
+def rebuild(package_id=None, only_missing=False, force=False, refresh=False,
+            defer_commit=False, package_ids=None, quiet=False):
     '''
         Rebuilds the search index.
 
@@ -196,16 +153,12 @@ def rebuild(package_id: Optional[str] = None,
     log.info("Rebuilding search index...")
 
     package_index = index_for(model.Package)
-    context: Context = {
-        'ignore_auth': True,
-        'validate': False,
-        'use_cache': False
-    }
+    context = {'model': model, 'ignore_auth': True, 'validate': False,
+        'use_cache': False}
 
     if package_id:
-        pkg_dict = logic.get_action('package_show')(context, {
-            'id': package_id
-        })
+        pkg_dict = logic.get_action('package_show')(context,
+            {'id': package_id})
         log.info('Indexing just package %r...', pkg_dict['name'])
         package_index.remove_dict(pkg_dict)
         package_index.insert_dict(pkg_dict)
@@ -216,12 +169,8 @@ def rebuild(package_id: Optional[str] = None,
             log.info('Indexing just package %r...', pkg_dict['name'])
             package_index.update_dict(pkg_dict, True)
     else:
-        packages = model.Session.query(model.Package.id)
-        if config.get('ckan.search.remove_deleted_packages'):
-            packages = packages.filter(model.Package.state != 'deleted')
-
-        package_ids = [r[0] for r in packages.all()]
-
+        package_ids = [r[0] for r in model.Session.query(model.Package.id).
+                       filter(model.Package.state != 'deleted').all()]
         if only_missing:
             log.info('Indexing only missing packages...')
             package_query = query_for(model.Package)
@@ -236,7 +185,7 @@ def rebuild(package_id: Optional[str] = None,
         else:
             log.info('Rebuilding the whole index...')
             # When refreshing, the index is not previously cleared
-            if clear:
+            if not refresh:
                 package_index.clear()
 
         total_packages = len(package_ids)
@@ -267,13 +216,13 @@ def rebuild(package_id: Optional[str] = None,
     log.info('Finished rebuilding search index.')
 
 
-def commit() -> None:
+def commit():
     package_index = index_for(model.Package)
     package_index.commit()
-    log.info('Committed pending changes on the search index')
+    log.info('Commited pending changes on the search index')
 
 
-def check() -> None:
+def check():
     package_query = query_for(model.Package)
 
     log.debug("Checking packages search index...")
@@ -286,31 +235,27 @@ def check() -> None:
                                                    len(pkgs)))
     for pkg_id in pkgs_not_indexed:
         pkg = model.Session.query(model.Package).get(pkg_id)
-        assert pkg
         print((pkg.metadata_modified.strftime('%Y-%m-%d'), pkg.name))
 
 
-def show(package_reference: str) -> dict[str, Any]:
+def show(package_reference):
     package_query = query_for(model.Package)
     return package_query.get_index(package_reference)
 
 
-def clear(package_reference: str) -> None:
+def clear(package_reference):
     package_index = index_for(model.Package)
     log.debug("Clearing search index for dataset %s..." %
               package_reference)
     package_index.delete_package({'id': package_reference})
 
 
-def clear_all() -> None:
+def clear_all():
     package_index = index_for(model.Package)
     log.debug("Clearing search index...")
     package_index.clear()
 
-def _get_schema_from_solr(file_offset: str):
-
-    timeout = config.get('ckan.requests.timeout')
-
+def _get_schema_from_solr(file_offset):
     solr_url, solr_user, solr_password = SolrSettings.get()
 
     url = solr_url.strip('/') + file_offset
@@ -318,14 +263,14 @@ def _get_schema_from_solr(file_offset: str):
     if solr_user is not None and solr_password is not None:
         response = requests.get(
             url,
-            timeout=timeout,
-            auth=HTTPBasicAuth(solr_user, solr_password))
+            timeout=TIMEOUT,
+            auth=requests.auth.HTTPBasicAuth(solr_user, solr_password))
     else:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url, timeout=TIMEOUT)
 
     return response
 
-def check_solr_schema_version(schema_file: Optional[str]=None) -> bool:
+def check_solr_schema_version(schema_file=None):
     '''
         Checks if the schema version of the SOLR server is compatible
         with this CKAN version.

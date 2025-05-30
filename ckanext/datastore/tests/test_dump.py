@@ -1,8 +1,9 @@
 # encoding: utf-8
 
-import unittest.mock as mock
+import mock
 import json
 import pytest
+import six
 import ckan.tests.helpers as helpers
 import ckan.tests.factories as factories
 
@@ -19,11 +20,11 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f'/datastore/dump/{resource["id"]}')
+        response = app.get("/datastore/dump/{0}".format(str(resource["id"])))
         assert (
             "_id,book\r\n"
             "1,annakarenina\n"
-            "2,warandpeace\n" == response.get_data(as_text=True)
+            "2,warandpeace\n" == six.ensure_text(response.data)
         )
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -59,10 +60,10 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f'/datastore/dump/{resource["id"]}')
-        content = response.get_data(as_text=True)
+        response = app.get("/datastore/dump/{0}".format(str(resource["id"])))
+        content = six.ensure_text(response.data)
         expected = (
-            "_id,b\xfck,author,published" ",characters,random_letters,nested"
+            u"_id,b\xfck,author,published" u",characters,random_letters,nested"
         )
         assert content[: len(expected)] == expected
         assert "warandpeace" in content
@@ -85,7 +86,7 @@ class TestDatastoreDump(object):
         assert (
             "_id,book\r\n"
             "1,annakarenina\n"
-            "2,warandpeace\n" == response.get_data(as_text=True)
+            "2,warandpeace\n" == six.ensure_text(response.data)
         )
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -108,8 +109,9 @@ class TestDatastoreDump(object):
         response = app.get(
             "/datastore/dump/{0}?limit=1".format(str(resource["id"]))
         )
-        expected_content = "_id,book\r\n" "1,annakarenina\n"
-        assert response.get_data(as_text=True) == expected_content
+        content = six.ensure_text(response.data)
+        expected_content = u"_id,book\r\n" u"1,annakarenina\n"
+        assert content == expected_content
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
     @pytest.mark.usefixtures("clean_datastore", "with_plugins")
@@ -149,8 +151,10 @@ class TestDatastoreDump(object):
                 resource["id"]
             )
         )
-        expected_content = "nested,author\r\n" '"{""a"": ""b""}",tolstoy\n'
-        assert response.get_data(as_text=True) == expected_content
+        content = six.ensure_text(response.data)
+
+        expected_content = u"nested,author\r\n" u'"{""a"": ""b""}",tolstoy\n'
+        assert content == expected_content
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
     @pytest.mark.usefixtures("clean_datastore", "with_plugins")
@@ -236,15 +240,16 @@ class TestDatastoreDump(object):
                 str(resource["id"])
             )
         )
+        content = six.ensure_text(res.data)
 
         expected_content = (
-            "_id\tb\xfck\tauthor\tpublished\tcharacters\trandom_letters\t"
-            "nested\r\n1\tannakarenina\ttolstoy\t2005-03-01T00:00:00\t"
-            '"[""Princess Anna"",""Sergius""]"\t'
-            '"[""a"",""e"",""x""]"\t"[""b"", '
-            '{""moo"": ""moo""}]"\n'
+            u"_id\tb\xfck\tauthor\tpublished\tcharacters\trandom_letters\t"
+            u"nested\r\n1\tannakarenina\ttolstoy\t2005-03-01T00:00:00\t"
+            u'"[""Princess Anna"",""Sergius""]"\t'
+            u'"[""a"",""e"",""x""]"\t"[""b"", '
+            u'{""moo"": ""moo""}]"\n'
         )
-        assert res.get_data(as_text=True) == expected_content
+        assert content == expected_content
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
     @pytest.mark.usefixtures("clean_datastore", "with_plugins")
@@ -279,7 +284,11 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        res = app.get(f"/datastore/dump/{resource['id']}?limit=1&format=tsv")
+        res = app.get(
+            "/datastore/dump/{0}?limit=1&format=tsv".format(
+                str(resource["id"])
+            )
+        )
 
         attachment_filename = res.headers['Content-disposition']
 
@@ -327,7 +336,7 @@ class TestDatastoreDump(object):
             )
         )
 
-        content = json.loads(res.data)
+        content = json.loads(six.ensure_text(res.data))
         expected_content = {
             u'fields': [
                 {u'id': u'_id', u'type': u'int'},
@@ -382,7 +391,11 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        res = app.get(f"/datastore/dump/{resource['id']}?limit=1&format=json")
+        res = app.get(
+            "/datastore/dump/{0}?limit=1&format=json".format(
+                resource["id"]
+            )
+        )
 
         attachment_filename = res.headers['Content-disposition']
 
@@ -424,7 +437,12 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        res = app.get(f"/datastore/dump/{resource['id']}?limit=1&format=xml")
+        res = app.get(
+            "/datastore/dump/{0}?limit=1&format=xml".format(
+                str(resource["id"])
+            )
+        )
+        content = six.ensure_text(res.data)
         expected_content = (
             u'<data xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">\n'
             r'<row _id="1">'
@@ -449,7 +467,7 @@ class TestDatastoreDump(object):
             u"</row>\n"
             u"</data>\n"
         )
-        assert res.get_data(as_text=True) == expected_content
+        assert content == expected_content
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
     @pytest.mark.usefixtures("clean_datastore", "with_plugins")
@@ -484,7 +502,11 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        res = app.get(f"/datastore/dump/{resource['id']}?limit=1&format=xml")
+        res = app.get(
+            "/datastore/dump/{0}?limit=1&format=xml".format(
+                str(resource["id"])
+            )
+        )
 
         attachment_filename = res.headers['Content-disposition']
 
@@ -501,11 +523,11 @@ class TestDatastoreDump(object):
         data = {
             "resource_id": resource["id"],
             "force": True,
-            "records": [{"record": str(num)} for num in list(range(12))],
+            "records": [{u"record": str(num)} for num in list(range(12))],
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}")
+        response = app.get("/datastore/dump/{0}".format(str(resource["id"])))
         assert get_csv_record_values(response.data) == list(range(12))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -520,7 +542,7 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}")
+        response = app.get("/datastore/dump/{0}".format(str(resource["id"])))
         assert get_csv_record_values(response.data) == list(range(12))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -536,7 +558,9 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}?limit=11")
+        response = app.get(
+            "/datastore/dump/{0}?limit=11".format(str(resource["id"]))
+        )
         assert get_csv_record_values(response.data) == list(range(11))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -552,7 +576,9 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}?limit=6")
+        response = app.get(
+            "/datastore/dump/{0}?limit=6".format(str(resource["id"]))
+        )
         assert get_csv_record_values(response.data) == list(range(6))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -568,7 +594,9 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}?limit=7")
+        response = app.get(
+            "/datastore/dump/{0}?limit=7".format(str(resource["id"]))
+        )
         assert get_csv_record_values(response.data) == list(range(7))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -584,7 +612,9 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}?limit=7")
+        response = app.get(
+            "/datastore/dump/{0}?limit=7".format(str(resource["id"]))
+        )
         assert get_csv_record_values(response.data) == list(range(7))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -600,7 +630,11 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}?limit=6&format=json")
+        response = app.get(
+            "/datastore/dump/{0}?limit=6&format=json".format(
+                str(resource["id"])
+            )
+        )
         assert get_json_record_values(response.data) == list(range(6))
 
     @pytest.mark.ckan_config("ckan.plugins", "datastore")
@@ -616,13 +650,19 @@ class TestDatastoreDump(object):
         }
         helpers.call_action("datastore_create", **data)
 
-        response = app.get(f"/datastore/dump/{resource['id']}?limit=7&format=json")
+        response = app.get(
+            "/datastore/dump/{0}?limit=7&format=json".format(
+                str(resource["id"])
+            )
+        )
         assert get_json_record_values(response.data) == list(range(7))
 
 
 def get_csv_record_values(response_body):
-    records = response_body.decode().split()[1:]
-    return [int(record.split(",")[1]) for record in records]
+    return [
+        int(record.split(",")[1]) for record in six.ensure_text(
+            response_body).split()[1:]
+    ]
 
 
 def get_json_record_values(response_body):

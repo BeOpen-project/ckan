@@ -190,7 +190,6 @@ plainto_tsquery
 point
 polygon
 popen
-pow
 power
 querytree
 quote_ident

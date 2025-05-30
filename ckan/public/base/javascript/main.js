@@ -35,7 +35,7 @@ this.ckan = this.ckan || {};
         moment.locale(locale);
         var date = moment(jQuery(this).data('datetime'));
         if (date.isValid()) {
-            jQuery(this).html(date.format("LL, LT ([UTC]Z)"));
+            jQuery(this).html(date.format("LL, LT ([UTC]Z)")); 
         }
         jQuery(this).show();
     })
@@ -45,10 +45,8 @@ this.ckan = this.ckan || {};
       ckan.i18n.load(data);
       ckan.module.initialize();
     });
-
-    // Initialize all popovers on a page if popover function exists
     if (jQuery.fn.popover !== undefined) {
-      jQuery('[data-bs-toggle="popover"]').popover();
+      jQuery('[data-target="popover"]').popover();
     }
   };
 

@@ -1,46 +1,48 @@
 # encoding: utf-8
-from __future__ import annotations
 
 import logging
-import json
-import unicodedata
-from typing import Optional, Any
 
-
-from urllib.parse import urlparse
+from six.moves.urllib.parse import urlparse
 from flask import Blueprint, make_response
-
+import six
+from six import text_type
 from dateutil.tz import tzutc
 from feedgen.feed import FeedGenerator
-from ckan.common import _, config, request, current_user
-from ckan.lib.helpers import helper_functions as h
-from ckan.lib.helpers import _url_with_params
+from ckan.common import _, config, g, request
+import ckan.lib.helpers as h
 import ckan.lib.base as base
+import ckan.model as model
 import ckan.logic as logic
 import ckan.plugins as plugins
-from ckan.types import Context, DataDict, PFeedFactory, Response
+import json
 
 log = logging.getLogger(__name__)
 
 feeds = Blueprint(u'feeds', __name__, url_prefix=u'/feeds')
 
+ITEMS_LIMIT = config.get(u'ckan.feeds.limit', 20)
+BASE_URL = config.get(u'ckan.site_url')
+SITE_TITLE = config.get(u'ckan.site_title', u'CKAN')
 
-def _package_search(data_dict: DataDict) -> tuple[int, list[dict[str, Any]]]:
+
+def _package_search(data_dict):
     """
     Helper method that wraps the package_search action.
 
      * unless overridden, sorts results by metadata_modified date
      * unless overridden, sets a default item limit
     """
-    context: Context = {
-        'user': current_user.name,
-        'auth_user_obj': current_user
+    context = {
+        u'model': model,
+        u'session': model.Session,
+        u'user': g.user,
+        u'auth_user_obj': g.userobj
     }
     if u'sort' not in data_dict or not data_dict['sort']:
         data_dict['sort'] = u'metadata_modified desc'
 
     if u'rows' not in data_dict or not data_dict['rows']:
-        data_dict['rows'] = config.get('ckan.feeds.limit')
+        data_dict['rows'] = ITEMS_LIMIT
 
     # package_search action modifies the data_dict, so keep our copy intact.
     query = logic.get_action(u'package_search')(context, data_dict.copy())
@@ -48,7 +50,7 @@ def _package_search(data_dict: DataDict) -> tuple[int, list[dict[str, Any]]]:
     return query['count'], query['results']
 
 
-def _enclosure(pkg: dict[str, Any]) -> 'Enclosure':
+def _enclosure(pkg):
     url = h.url_for(
         u'api.action',
         logic_function=u'package_show',
@@ -57,13 +59,20 @@ def _enclosure(pkg: dict[str, Any]) -> 'Enclosure':
         _external=True
     )
     enc = Enclosure(url)
-    enc.mime_type = u'application/json'
-    enc.length = str(len(json.dumps(pkg)))
+    enc.type = u'application/json'
+    enc.length = text_type(len(json.dumps(pkg)))
     return enc
 
 
-class Enclosure(str):
-    def __init__(self, url: str):
+def _set_extras(**kw):
+    extras = []
+    for key, value in six.iteritems(kw):
+        extras.append({key: value})
+    return extras
+
+
+class Enclosure(text_type):
+    def __init__(self, url):
         self.url = url
         self.length = u'0'
         self.mime_type = u'application/json'
@@ -72,18 +81,18 @@ class Enclosure(str):
 class CKANFeed(FeedGenerator):
     def __init__(
         self,
-        feed_title: str,
-        feed_link: str,
-        feed_description: str,
-        language: Optional[str],
-        author_name: Optional[str],
-        feed_guid: Optional[str],
-        feed_url: Optional[str],
-        previous_page: Optional[str],
-        next_page: Optional[str],
-        first_page: Optional[str],
-        last_page: Optional[str],
-    ) -> None:
+        feed_title,
+        feed_link,
+        feed_description,
+        language,
+        author_name,
+        feed_guid,
+        feed_url,
+        previous_page,
+        next_page,
+        first_page,
+        last_page,
+    ):
         super(CKANFeed, self).__init__()
 
         self.title(feed_title)
@@ -104,10 +113,10 @@ class CKANFeed(FeedGenerator):
                 continue
             self.link(href=href, rel=rel)
 
-    def writeString(self, encoding: str) -> str:
+    def writeString(self, encoding):
         return self.atom_str(encoding=encoding)
 
-    def add_item(self, **kwargs: Any) -> None:
+    def add_item(self, **kwargs):
         entry = self.add_entry()
         for key, value in kwargs.items():
             if key in {u"published", u"updated"} and not value.tzinfo:
@@ -130,21 +139,13 @@ class CKANFeed(FeedGenerator):
             getattr(entry, key)(value)
 
 
-def output_feed(
-        results: list[dict[str, Any]], feed_title: str, feed_description: str,
-        feed_link: str, feed_url: str, navigation_urls: dict[str, str],
-        feed_guid: str) -> Response:
-    author_name = config.get(u'ckan.feeds.author_name').strip() or \
-        config.get(u'ckan.site_id').strip()
-
-    def remove_control_characters(s: str):
-        if not s:
-            return ""
-
-        return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
+def output_feed(results, feed_title, feed_description, feed_link, feed_url,
+                navigation_urls, feed_guid):
+    author_name = config.get(u'ckan.feeds.author_name', u'').strip() or \
+        config.get(u'ckan.site_id', u'').strip()
 
     # TODO: language
-    feed_class: PFeedFactory = CKANFeed
+    feed_class = CKANFeed
     for plugin in plugins.PluginImplementations(plugins.IFeed):
         if hasattr(plugin, u'get_feed_class'):
             feed_class = plugin.get_feed_class()
@@ -163,7 +164,7 @@ def output_feed(
         last_page=navigation_urls[u'last'], )
 
     for pkg in results:
-        additional_fields: dict[str, Any] = {}
+        additional_fields = {}
 
         for plugin in plugins.PluginImplementations(plugins.IFeed):
             if hasattr(plugin, u'get_item_additional_fields'):
@@ -177,9 +178,9 @@ def output_feed(
                 id=pkg['id'],
                 ver=3,
                 _external=True),
-            description=remove_control_characters(pkg.get(u'notes', u'')),
-            updated=h.date_str_to_datetime(pkg.get(u'metadata_modified', '')),
-            published=h.date_str_to_datetime(pkg.get(u'metadata_created', '')),
+            description=pkg.get(u'notes', u''),
+            updated=h.date_str_to_datetime(pkg.get(u'metadata_modified')),
+            published=h.date_str_to_datetime(pkg.get(u'metadata_created')),
             unique_id=_create_atom_id(u'/dataset/%s' % pkg['id']),
             author_name=pkg.get(u'author', u''),
             author_email=pkg.get(u'author_email', u''),
@@ -192,26 +193,30 @@ def output_feed(
     return resp
 
 
-def group(id: str) -> Response:
+def group(id):
     try:
-        context: Context = {
-            'user': current_user.name,
-            'auth_user_obj': current_user
+        context = {
+            u'model': model,
+            u'session': model.Session,
+            u'user': g.user,
+            u'auth_user_obj': g.userobj
         }
         group_dict = logic.get_action(u'group_show')(context, {u'id': id})
     except logic.NotFound:
         base.abort(404, _(u'Group not found'))
     except logic.NotAuthorized:
-        base.abort(403, _('Not authorized to see this page'))
+        base.abort(403, _(u'Not authorized to see this page'))
 
     return group_or_organization(group_dict, is_org=False)
 
 
-def organization(id: str) -> Response:
+def organization(id):
     try:
-        context: Context = {
-            u'user': current_user.name,
-            u'auth_user_obj': current_user
+        context = {
+            u'model': model,
+            u'session': model.Session,
+            u'user': g.user,
+            u'auth_user_obj': g.userobj
         }
         group_dict = logic.get_action(u'organization_show')(context, {
             u'id': id
@@ -219,12 +224,12 @@ def organization(id: str) -> Response:
     except logic.NotFound:
         base.abort(404, _(u'Organization not found'))
     except logic.NotAuthorized:
-        base.abort(403, _('Not authorized to see this page'))
+        base.abort(403, _(u'Not authorized to see this page'))
 
     return group_or_organization(group_dict, is_org=True)
 
 
-def tag(id: str) -> Response:
+def tag(id):
     data_dict, params = _parse_url_params()
     data_dict['fq'] = u'tags: "%s"' % id
 
@@ -242,10 +247,9 @@ def tag(id: str) -> Response:
 
     alternate_url = _alternate_url(params, tags=id)
 
-    site_title = config.get(u'ckan.site_title')
-    title = u'%s - Tag: "%s"' % (site_title, id)
+    title = u'%s - Tag: "%s"' % (SITE_TITLE, id)
     desc = u'Recently created or updated datasets on %s by tag: "%s"' % \
-           (site_title, id)
+           (SITE_TITLE, id)
     guid = _create_atom_id(u'/feeds/tag/%s.atom' % id)
 
     return output_feed(
@@ -258,7 +262,7 @@ def tag(id: str) -> Response:
         navigation_urls=navigation_urls)
 
 
-def group_or_organization(obj_dict: dict[str, Any], is_org: bool) -> Response:
+def group_or_organization(obj_dict, is_org):
     data_dict, params = _parse_url_params()
     if is_org:
         key = u'owner_org'
@@ -271,7 +275,6 @@ def group_or_organization(obj_dict: dict[str, Any], is_org: bool) -> Response:
 
     data_dict['fq'] = u'{0}: "{1}"'.format(key, value)
     item_count, results = _package_search(data_dict)
-    site_title = config.get(u'ckan.site_title')
 
     navigation_urls = _navigation_urls(
         params,
@@ -288,15 +291,15 @@ def group_or_organization(obj_dict: dict[str, Any], is_org: bool) -> Response:
             u'feeds/organization/%s.atom' % obj_dict['name'])
         alternate_url = _alternate_url(params, organization=obj_dict['name'])
         desc = u'Recently created or updated datasets on %s '\
-               'by organization: "%s"' % (site_title, obj_dict['title'])
-        title = u'%s - Organization: "%s"' % (site_title, obj_dict['title'])
+               'by organization: "%s"' % (SITE_TITLE, obj_dict['title'])
+        title = u'%s - Organization: "%s"' % (SITE_TITLE, obj_dict['title'])
 
     else:
         guid = _create_atom_id(u'feeds/group/%s.atom' % obj_dict['name'])
         alternate_url = _alternate_url(params, groups=obj_dict['name'])
         desc = u'Recently created or updated datasets on %s '\
-               'by group: "%s"' % (site_title, obj_dict['title'])
-        title = u'%s - Group: "%s"' % (site_title, obj_dict['title'])
+               'by group: "%s"' % (SITE_TITLE, obj_dict['title'])
+        title = u'%s - Group: "%s"' % (SITE_TITLE, obj_dict['title'])
 
     return output_feed(
         results,
@@ -308,26 +311,26 @@ def group_or_organization(obj_dict: dict[str, Any], is_org: bool) -> Response:
         navigation_urls=navigation_urls)
 
 
-def _parse_url_params() -> tuple[dict[str, Any], dict[str, Any]]:
+def _parse_url_params():
     """
     Constructs a search-query dict from the URL query parameters.
 
     Returns the constructed search-query dict, and the valid URL
     query parameters.
     """
-    page = h.get_page_number(request.args)
+    page = h.get_page_number(request.params)
 
-    limit = config.get('ckan.feeds.limit')
+    limit = ITEMS_LIMIT
     data_dict = {u'start': (page - 1) * limit, u'rows': limit}
 
     # Filter ignored query parameters
     valid_params = ['page']
-    params = dict((p, request.args.get(p)) for p in valid_params
-                  if p in request.args)
+    params = dict((p, request.params.get(p)) for p in valid_params
+                  if p in request.params)
     return data_dict, params
 
 
-def general() -> Response:
+def general():
     data_dict, params = _parse_url_params()
     data_dict['q'] = u'*:*'
 
@@ -346,12 +349,11 @@ def general() -> Response:
 
     guid = _create_atom_id(u'/feeds/dataset.atom')
 
-    site_title = config.get(u'ckan.site_title')
-    desc = u'Recently created or updated datasets on %s' % site_title
+    desc = u'Recently created or updated datasets on %s' % SITE_TITLE
 
     return output_feed(
         results,
-        feed_title=site_title,
+        feed_title=SITE_TITLE,
         feed_description=desc,
         feed_link=alternate_url,
         feed_guid=guid,
@@ -359,58 +361,58 @@ def general() -> Response:
         navigation_urls=navigation_urls)
 
 
-def custom() -> Response:
+def custom():
     """
     Custom atom feed
 
     """
-    q = request.args.get(u'q', u'')
+    q = request.params.get(u'q', u'')
     fq = u''
     search_params = {}
-    for (param, value) in request.args.items():
+    for (param, value) in request.params.items():
         if param not in [u'q', u'page', u'sort'] \
                 and len(value) and not param.startswith(u'_'):
             search_params[param] = value
             fq += u'%s:"%s"' % (param, value)
 
-    page = h.get_page_number(request.args)
+    page = h.get_page_number(request.params)
 
-    limit = config.get('ckan.feeds.limit')
-    data_dict: dict[str, Any] = {
+    limit = ITEMS_LIMIT
+    data_dict = {
         u'q': q,
         u'fq': fq,
         u'start': (page - 1) * limit,
         u'rows': limit,
-        u'sort': request.args.get(u'sort', None)
+        u'sort': request.params.get(u'sort', None)
     }
 
     item_count, results = _package_search(data_dict)
 
     navigation_urls = _navigation_urls(
-        request.args,
+        request.params,
         item_count=item_count,
         limit=data_dict['rows'],
         controller=u'feeds',
         action=u'custom')
 
-    feed_url = _feed_url(request.args, controller=u'feeds', action=u'custom')
+    feed_url = _feed_url(request.params, controller=u'feeds', action=u'custom')
 
-    atom_url = _url_with_params(u'/feeds/custom.atom', search_params.items())
+    atom_url = h._url_with_params(u'/feeds/custom.atom', search_params.items())
 
-    alternate_url = _alternate_url(request.args)
-    site_title = config.get(u'ckan.site_title')
+    alternate_url = _alternate_url(request.params)
+
     return output_feed(
         results,
-        feed_title=u'%s - Custom query' % site_title,
+        feed_title=u'%s - Custom query' % SITE_TITLE,
         feed_description=u'Recently created or updated'
-        ' datasets on %s. Custom query: \'%s\'' % (site_title, q),
+        ' datasets on %s. Custom query: \'%s\'' % (SITE_TITLE, q),
         feed_link=alternate_url,
         feed_guid=_create_atom_id(atom_url),
         feed_url=feed_url,
         navigation_urls=navigation_urls)
 
 
-def _alternate_url(params: dict[str, Any], **kwargs: Any) -> str:
+def _alternate_url(params, **kwargs):
     search_params = params.copy()
     search_params.update(kwargs)
 
@@ -421,28 +423,22 @@ def _alternate_url(params: dict[str, Any], **kwargs: Any) -> str:
     return _feed_url(search_params, controller=u'dataset', action=u'search')
 
 
-def _feed_url(query: dict[str, Any], controller: str, action: str,
-              **kwargs: Any) -> str:
+def _feed_url(query, controller, action, **kwargs):
     """
     Constructs the url for the given action.  Encoding the query
     parameters.
     """
-    for item in query.items():
+    for item in six.iteritems(query):
         kwargs['query'] = item
-    endpoint = controller + '.' + action
-    return h.url_for(endpoint, **kwargs)
+    return h.url_for(controller=controller, action=action, **kwargs)
 
 
-def _navigation_urls(
-        query: dict[str, Any], controller: str, action: str,
-        item_count: int, limit: int, **kwargs: Any) -> dict[str, Any]:
+def _navigation_urls(query, controller, action, item_count, limit, **kwargs):
     """
     Constructs and returns first, last, prev and next links for paging
     """
 
-    urls: dict[str, Optional[str]] = dict(
-        (rel, None) for rel in u'previous next first last'.split()
-    )
+    urls = dict((rel, None) for rel in u'previous next first last'.split())
 
     page = int(query.get(u'page', 1))
 
@@ -480,9 +476,7 @@ def _navigation_urls(
     return urls
 
 
-def _create_atom_id(resource_path: str,
-                    authority_name: Optional[str] = None,
-                    date_string: Optional[str] = None) -> str:
+def _create_atom_id(resource_path, authority_name=None, date_string=None):
     """
     Helper method that creates an atom id for a feed or entry.
 
@@ -547,17 +541,17 @@ def _create_atom_id(resource_path: str,
     [4] http://www.ietf.org/rfc/rfc4287
     """
     if authority_name is None:
-        authority_name = config.get(u'ckan.feeds.authority_name')
+        authority_name = config.get(u'ckan.feeds.authority_name', u'').strip()
         if not authority_name:
-            site_url = config.get(u'ckan.site_url')
+            site_url = config.get(u'ckan.site_url', u'').strip()
             authority_name = urlparse(site_url).netloc
 
     if not authority_name:
         log.warning(u'No authority_name available for feed generation.  '
                     'Generated feed will be invalid.')
-        authority_name = ''
+
     if date_string is None:
-        date_string = config.get(u'ckan.feeds.date')
+        date_string = config.get(u'ckan.feeds.date', u'')
 
     if not date_string:
         log.warning(u'No date_string available for feed generation.  '
@@ -566,7 +560,7 @@ def _create_atom_id(resource_path: str,
         # Don't generate a tagURI without a date as it wouldn't be valid.
         # This is best we can do, and if the site_url is not set, then
         # this still results in an invalid feed.
-        site_url = config.get(u'ckan.site_url')
+        site_url = config.get(u'ckan.site_url', u'')
         return u''.join([site_url, resource_path])
 
     tagging_entity = u','.join([authority_name, date_string])

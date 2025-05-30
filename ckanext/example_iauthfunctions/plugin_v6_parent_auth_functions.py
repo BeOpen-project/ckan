@@ -1,13 +1,12 @@
 # encoding: utf-8
 
-from typing import Optional
-from ckan.types import AuthResult, Context, DataDict
+from ckan.common import config
+
 import ckan.plugins as plugins
+import ckan.plugins.toolkit as toolkit
 
 
-def package_delete(context: Context,
-                   data_dict: Optional[DataDict] = None) -> AuthResult:
-
+def package_delete(context, data_dict=None):
     return {'success': False,
             'msg': 'Only sysadmins can delete packages'}
 

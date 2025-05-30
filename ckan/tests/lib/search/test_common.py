@@ -1,20 +1,12 @@
 # encoding: utf-8
 import pytest
 
-from ckan.common import config, g
-from ckan.lib.search import text_traceback
+from ckan.common import config
 
 
-@pytest.mark.ckan_config("solr_user", "solr")
-@pytest.mark.ckan_config("solr_password", "password")
+@pytest.mark.ckan_config(u"solr_user", u"solr")
+@pytest.mark.ckan_config(u"solr_password", u"password")
 def test_solr_user_and_password(app):
 
-    assert config["solr_user"] == "solr"
-    assert config["solr_password"] == "password"
-
-
-def test_text_traceback_dont_fail_on_runtime_error():
-    try:
-        _ = g.user
-    except RuntimeError:
-        assert text_traceback()
+    assert config[u"solr_user"] == u"solr"
+    assert config[u"solr_password"] == u"password"

@@ -3,18 +3,17 @@
 import os
 
 import pytest
-from urllib.parse import urlparse
-from sqlalchemy import inspect, Column, Integer
+import six
+from six.moves.urllib.parse import urlparse
 
 import ckan.plugins as plugins
-from ckan.common import config, asbool
+import ckan.plugins.toolkit as tk
+from ckan.common import config
 from ckan.tests import factories
-from ckan.lib.redis import connect_to_redis
-from ckan.model.base import BaseModel
 
 
 def test_ckan_config_fixture(ckan_config):
-    assert asbool(ckan_config[u"testing"])
+    assert tk.asbool(ckan_config[u"testing"])
 
 
 def test_ckan_config_do_not_have_some_new_config(ckan_config):
@@ -36,27 +35,16 @@ def test_ckan_config_mark_without_explicit_config_fixture():
     assert config[u"some.new.config"] == u"exists"
 
 
-class TestWithPlugins:
-    @pytest.fixture()
-    def load_example_helpers(self):
-        plugins.unload_all()
-        plugins.load("example_itemplatehelpers")
-
-    @pytest.mark.ckan_config(u"ckan.plugins", u"stats")
-    @pytest.mark.usefixtures(u"with_plugins")
-    def test_with_plugins_is_able_to_run_with_stats(self):
-        assert plugins.plugin_loaded(u"stats")
-
-    def test_with_plugins_unloads_enabled_plugins(
-            self, load_example_helpers, with_plugins
-    ):
-        assert "example_helper" not in plugins.toolkit.h
+@pytest.mark.ckan_config(u"ckan.plugins", u"stats")
+@pytest.mark.usefixtures(u"with_plugins")
+def test_with_plugins_is_able_to_run_with_stats():
+    assert plugins.plugin_loaded(u"stats")
 
 
-@pytest.mark.ckan_config("ckan.site_url", "https://example.org")
-@pytest.mark.usefixtures("with_request_context")
+@pytest.mark.ckan_config(u"ckan.site_url", u"https://example.org")
+@pytest.mark.usefixtures(u"with_request_context")
 def test_existing_ckan_config_mark_with_test_request(ckan_config):
-    assert ckan_config["ckan.site_url"] == "https://example.org"
+    assert ckan_config[u"ckan.site_url"] == u"https://example.org"
 
 
 class TestMethodLevelConfig(object):
@@ -88,13 +76,22 @@ class TestClassLevelConfig(object):
 
 class TestCreateWithUpload(object):
 
-    def test_create_organization(self, create_with_upload, ckan_config, faker):
+    def test_create_organization(self, create_with_upload, ckan_config):
         user = factories.User()
         context = {
             u"user": user["name"]
         }
+        some_png = """
+        89 50 4E 47 0D 0A 1A 0A 00 00 00 0D 49 48 44 52
+        00 00 00 01 00 00 00 01 08 02 00 00 00 90 77 53
+        DE 00 00 00 0C 49 44 41 54 08 D7 63 F8 CF C0 00
+        00 03 01 01 00 18 DD 8D B0 00 00 00 00 49 45 4E
+        44 AE 42 60 82"""
+        some_png = some_png.replace(u' ', u'').replace(u'\n', u'')
+        some_png_bytes = bytes(bytearray.fromhex(some_png))
+
         org = create_with_upload(
-            faker.image(), u"image.png",
+            some_png_bytes, u"image.png",
             context=context,
             action=u"organization_create",
             upload_field_name=u"image_upload",
@@ -110,7 +107,10 @@ class TestCreateWithUpload(object):
         with open(image_path, u"rb") as image:
             content = image.read()
             # PNG signature
-            assert content.hex()[:16].upper() == '89504E470D0A1A0A'
+            if six.PY3:
+                assert content.hex()[:16].upper() == u'89504E470D0A1A0A'
+            else:
+                assert content.encode(u"hex")[:16].upper() == u'89504E470D0A1A0A'
 
     def test_create_resource(self, create_with_upload):
         dataset = factories.Dataset()
@@ -124,79 +124,15 @@ class TestCreateWithUpload(object):
 
 
 class TestMigrateDbFor(object):
-    @pytest.mark.ckan_config("ckan.plugins", "example_database_migrations")
-    @pytest.mark.usefixtures("with_plugins", "clean_db")
+    @pytest.mark.ckan_config(u"ckan.plugins", u"example_database_migrations")
+    @pytest.mark.usefixtures(u"with_plugins", u"clean_db")
     def test_migrations_applied(self, migrate_db_for):
         import ckan.model as model
+        has_table = model.Session.bind.has_table
+        assert not has_table(u"example_database_migrations_x")
+        assert not has_table(u"example_database_migrations_y")
 
-        inspector = inspect(model.Session.bind)
-        assert not inspector.has_table("example_database_migrations_x")
-        assert not inspector.has_table("example_database_migrations_y")
+        migrate_db_for(u"example_database_migrations")
 
-        migrate_db_for("example_database_migrations")
-
-        inspector = inspect(model.Session.bind)
-        assert inspector.has_table("example_database_migrations_x")
-        assert inspector.has_table("example_database_migrations_y")
-
-
-@pytest.mark.usefixtures("non_clean_db")
-def test_non_clean_db_does_not_fail(package_factory):
-    assert package_factory()
-
-
-class TestRedisFixtures:
-
-    @pytest.fixture()
-    def add_redis_record(self, redis, faker):
-        """Create a random record in Redis."""
-        redis.set(faker.word(), faker.word())
-
-    @pytest.fixture()
-    def redis(self):
-        """Return Redis client."""
-        return connect_to_redis()
-
-    @pytest.mark.usefixtures("add_redis_record", "clean_redis")
-    def test_clean_redis_after_adding_record(self, redis):
-        """clean_redis fixture removes everything from redis."""
-        assert redis.keys("*") == []
-
-    @pytest.mark.usefixtures("clean_redis", "add_redis_record")
-    def test_clean_redis_before_adding_record(self, redis):
-        """It's possible to add data to redis after cleaning."""
-        assert len(redis.keys("*")) == 1
-
-    def test_reset_redis(self, redis, reset_redis):
-        """reset_redis can be used for removing records multiple times."""
-        redis.set("AAA-1", 1)
-        redis.set("AAA-2", 2)
-        redis.set("BBB-3", 3)
-
-        reset_redis("AAA-*")
-        assert not redis.get("AAA-1")
-        assert not redis.get("AAA-2")
-
-        assert redis.get("BBB-3")
-
-        reset_redis()
-        assert not redis.get("BBB-3")
-
-
-class CustomTestModel(BaseModel):
-    __tablename__ = "test_table"
-    id = Column(Integer, primary_key=True)
-
-
-@pytest.mark.parametrize("_n", [1, 2])
-@pytest.mark.usefixtures("clean_db")
-def test_clean_db_does_not_break_with_custom_models(_n):
-    """This test verifies that `CustomTestModel` that has no corresponding
-    table in DB is ignored by `clean_db` fixture. If this test is executed
-    individually, on first run DB may be empty and `clean_db` doesn't try to
-    delete anything. So we have to run this test two times to guarantee, that
-    on the second execution tables are created and `clean_db` invokes `DELETE
-    ...` statement.
-
-    """
-    pass
+        assert has_table(u"example_database_migrations_x")
+        assert has_table(u"example_database_migrations_y")

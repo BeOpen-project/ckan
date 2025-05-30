@@ -4,8 +4,7 @@
 Page View Tracking
 ==================
 
-CKAN has a core extension already installed that allows the system to
-anonymously track visits to pages of your site. You ca use this tracking data to:
+CKAN can track visits to pages of your site and use this tracking data to:
 
 * Sort datasets by popularity
 * Highlight popular datasets and resources
@@ -19,23 +18,16 @@ anonymously track visits to pages of your site. You ca use this tracking data to
     A CKAN extension that integrates Google Analytics into CKAN.
 
 
-.. note::
-
-   CKAN 2.10 and older versions had tracking integrated into the core and this
-   instructions no longer apply. Checkout the
-   `2.10 documentation <https://docs.ckan.org/en/2.10/maintaining/tracking.html>`_
-   for more information.
-
-
-Enabling Page View Tracking Extension
-=====================================
+Enabling Page View Tracking
+===========================
 
 To enable page view tracking:
 
-1. Add the `tracking` extension to your CKAN configuration file (e.g. |ckan.ini|)::
+1. Set :ref:`ckan.tracking_enabled` to true in the ``[app:main]`` section of your
+   CKAN configuration file (e.g. |ckan.ini|)::
 
     [app:main]
-    ckan.plugins = tracking
+    ckan.tracking_enabled = true
 
    Save the file and restart your web server. CKAN will now record raw page
    view tracking data in your CKAN database as pages are viewed.
@@ -68,9 +60,8 @@ To enable page view tracking:
 Retrieving Tracking Data
 ========================
 
-When the extension is enabled, tracking summary data for datasets and resources
-is available in the dataset and resource dictionaries returned by,
-for example, the ``package_show()``
+Tracking summary data for datasets and resources is available in the dataset
+and resource dictionaries returned by, for example, the ``package_show()``
 API::
 
   "tracking_summary": {
@@ -127,8 +118,3 @@ badge and a tooltip showing the number of views:
 .. image:: /images/popular-resource.png
 
 
-.. tip::
-
-    You can change the number of views that a dataset or resource needs to be
-    considered popular by overriding ``ckanext/tracking/templates/snippets/popular.html``
-    template. The default is 10.

@@ -5,7 +5,7 @@
 {%- block htmltag -%}
 {% set lang = h.lang() %}
 <!--[if IE 9]> <html lang="{{ lang }}" class="ie9"> <![endif]-->
-<!--[if gt IE 8]><!--> <html lang="{{ lang }}" {% if h.is_rtl_language()  %} dir="rtl" {% endif %} > <!--<![endif]-->
+<!--[if gt IE 8]><!--> <html lang="{{ lang }}"> <!--<![endif]-->
 {%- endblock -%}
 
   {# Allows custom attributes to be added to the <head> tag #}
@@ -24,9 +24,6 @@
     #}
     {%- block meta -%}
       <meta charset="utf-8" />
-      <meta name="csrf_field_name" content="{{ g.csrf_field_name }}" />
-      <meta name="{{ g.csrf_field_name }}" content="{{ csrf_token() }}" />
-
       {% block meta_generator %}<meta name="generator" content="ckan {{ h.ckan_version() }}" />{% endblock %}
       {% block meta_viewport %}<meta name="viewport" content="width=device-width, initial-scale=1.0">{% endblock %}
     {%- endblock -%}
@@ -74,6 +71,11 @@
       {% asset theme %}
     {% endblock %}
 
+    {% block head_extras %}
+      {# defined in the config.ini under "ckan.template_head_end" #}
+      {{ g.template_head_end | safe }}
+    {% endblock %}
+
     {# render all assets included in styles block #}
     {{ h.render_assets('style') }}
     {%- block custom_styles %}
@@ -86,7 +88,7 @@
   </head>
 
   {# Allows custom attributes to be added to the <body> tag #}
-  <body{% block bodytag %} data-site-root="{{ h.url_for('home.index', locale='default', qualified=true) }}" data-locale-root="{{ h.url_for('home.index', qualified=true) }}" {% endblock %}>
+  <body{% block bodytag %} data-site-root="{{ h.url_for('/', locale='default', qualified=true) }}" data-locale-root="{{ h.url_for('/', qualified=true) }}" {% endblock %}>
 
     {#
     The page block allows you to add content to the page. Most of the time it is
@@ -104,11 +106,16 @@
 
     {#
     DO NOT USE THIS BLOCK FOR ADDING SCRIPTS
-    Scripts should be loaded by the {% assets %} tag except in very special
+    Scripts should be loaded by the {% resource %} tag except in very special
     circumstances
     #}
     {%- block scripts %}
     {% endblock -%}
+
+    {% block body_extras -%}
+      {# defined in the config.ini under "ckan.template_footer_end" #}
+      {{ g.template_footer_end | safe }}
+    {%- endblock %}
 
     {# render all assets included in scripts block and everywhere else #}
     {# make sure there are no calls to `asset` tag after this point #}

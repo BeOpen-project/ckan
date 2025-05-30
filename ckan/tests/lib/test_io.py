@@ -1,12 +1,14 @@
-import hashlib
+# encoding: utf-8
+
 import io
 import os.path
 import shutil
 import tempfile
 import pytest
+import six
+from six import text_type
 
-from ckan.common import config
-import ckan.lib.io as ckan_io
+import ckan.lib.io_ as ckan_io
 
 
 def test_decode_path_fails_for_unicode():
@@ -20,15 +22,15 @@ def test_encode_path_fails_for_str():
 
 
 def test_decode_path_returns_unicode():
-    assert isinstance(ckan_io.decode_path(b"just_a_str"), str)
+    assert isinstance(ckan_io.decode_path(b"just_a_str"), text_type)
 
 
 def test_encode_path_returns_str():
-    assert isinstance(ckan_io.encode_path(u"just_a_unicode"), bytes)
+    assert isinstance(ckan_io.encode_path(u"just_a_unicode"), six.binary_type)
 
 
 def test_decode_encode_path():
-    temp_dir = ckan_io.decode_path(tempfile.mkdtemp().encode())
+    temp_dir = ckan_io.decode_path(six.b(tempfile.mkdtemp()))
     try:
         filename = u"\xf6\xe4\xfc.txt"
         path = os.path.join(temp_dir, filename)
@@ -39,10 +41,3 @@ def test_decode_encode_path():
         assert ckan_io.decode_path(filenames[0]) == filename
     finally:
         shutil.rmtree(temp_dir)
-
-
-def test_get_ckan_temp_directory():
-    suffix = hashlib.sha256(config["SECRET_KEY"].encode()).hexdigest()[:10]
-    expected_folder = f"ckan_{suffix}"
-
-    assert ckan_io.get_ckan_temp_directory() == os.path.join(tempfile.gettempdir(), expected_folder)

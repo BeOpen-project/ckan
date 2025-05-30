@@ -10,13 +10,6 @@
       {% endif %}
       {{ content}}
     </div>
-    {% block login_redirect %}
-    {% if show_login_redirect_link %}
-    <div class="module-content">
-      {{ _("You might need to login to access this page.") }} <a href="{{ h.url_for('user.login') }}">{{ _("Click here to login") }}</a> 
-    </div>
-  {% endif %}
-  {% endblock %}
   </article>
 {% endblock %}
 
@@ -25,7 +18,7 @@
 
 {% block flash %}
   {# eat the flash messages caused by the 404 #}
-  {% set flash_messages = h.get_flashed_messages() %}
+  {% set flash_messages = h.flash.pop_messages() %}
 {% endblock %}
 
 {% block secondary %}{% endblock %}

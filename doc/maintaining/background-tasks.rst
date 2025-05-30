@@ -101,7 +101,7 @@ You can also give the job a title which can be useful for identifying it when
 
 A timeout can also be set on a job iwth the ``timeout`` keyword argument::
 
-    jobs.enqueue(log_job, [u'My log message'], rq_kwargs={"timeout": 3600})
+    jobs.enqueue(log_job, [u'My log message'], timeout=3600)
 
 The default background job timeout is 180 seconds. This is set in the
 ckan config ``.ini`` file under the ``ckan.jobs.timeout`` item.
@@ -173,10 +173,6 @@ First install Supervisor::
 Next copy the configuration file template::
 
     sudo cp /usr/lib/ckan/default/src/ckan/ckan/config/supervisor-ckan-worker.conf /etc/supervisor/conf.d
-    
-Next make sure the ``/var/log/ckan/`` directory exists, if not then it needs to be created::
-
-    sudo mkdir /var/log/ckan
 
 Open ``/etc/supervisor/conf.d/supervisor-ckan-worker.conf`` in your favourite
 text editor and make sure all the settings suit your needs. If you installed
@@ -207,15 +203,14 @@ via
 
     ckan -c |ckan.ini| jobs test
 
-The worker's log files (``/var/log/ckan/ckan-worker.stdout.log`` and/or ``/var/log/ckan/ckan-worker.stderr.log``) 
-should then show how the job was processed by the worker.
+The worker's log (``/var/log/ckan-worker.log``) should then show how the job
+was processed by the worker.
 
 In case you run into problems, make sure to check the logs of Supervisor and
 the worker::
 
     cat /var/log/supervisor/supervisord.log
-    cat /var/log/ckan/ckan-worker.stdout.log
-    cat /var/log/ckan/ckan-worker.sterr.log
+    cat /var/log/ckan-worker.log
 
 
 
@@ -302,7 +297,7 @@ synchronously instead of asynchronously:
 
 .. code-block:: python
 
-    import unittest.mock as mock
+    import mock
 
     from ckan.tests import helpers
 
@@ -381,7 +376,10 @@ job ID, that will be done automatically for you.
 
 Supporting both systems at once
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-It might make sense to support both the RQ and the old Celery-based job system.
+Not all CKAN installations will immediately update to CKAN 2.7. It might
+therefore make sense for you to support both the new and the old job system.
+That way you are ready when the old system is removed but can continue to
+support older CKAN installations.
 
 The easiest way to do that is to use `ckanext-rq
 <https://github.com/davidread/ckanext-rq>`_, which provides a back-port of the
@@ -433,3 +431,4 @@ Use that function as follows for enqueuing a job::
     compat_enqueue(u'my_extension.echofunction',
                    ckanext.my_extension.plugin.echo,
                    [u'Hello World'])
+
